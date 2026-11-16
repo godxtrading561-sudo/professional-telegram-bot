@@ -1,8 +1,9 @@
+
 import os
 import requests
 
-BOT_TOKEN = os.environ["9239337248:AAEk3gd0csmrosxUVP7EidVmXqbon2ekRIQ"]
-CHANNEL_ID = os.environ["-1004478501088"]
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+CHANNEL_ID = os.environ["CHANNEL_ID"]
 
 URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
@@ -18,5 +19,6 @@ def send_message(message):
     response.raise_for_status()
     print("Message sent successfully!")
 
-if name == "main":
+if __name__ == "__main__":
     send_message("🤖 PROFESSIONAL BOT CONNECTED! ✅")
+    
