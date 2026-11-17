@@ -8,10 +8,12 @@ API_URL = "https://otcharts.com/v1/candles"
 
 PAIR = "EURUSD_otc"
 TIMEFRAME = 60
-CANDLE_LIMIT = 100
+CANDLE_LIMIT = 1000
 
 
 def get_candles():
+    print("Connecting to OTCharts...")
+
     response = requests.get(
         API_URL,
         headers={
@@ -28,17 +30,20 @@ def get_candles():
     )
 
     response.raise_for_status()
-    data = response.json()
 
+    data = response.json()
     candles = data.get("candles", [])
+
+    if data.get("symbol") != PAIR:
+        raise RuntimeError("Returned pair does not match requested pair")
 
     if len(candles) < 30:
         raise RuntimeError(
             f"Not enough candles received: {len(candles)}"
         )
 
-    if data.get("symbol") != PAIR:
-        raise RuntimeError("Returned pair does not match requested pair")
+    print("Requested candles:", CANDLE_LIMIT)
+    print("Actually received:", len(candles))
 
     return candles
 
@@ -80,18 +85,23 @@ def rsi(values, period=14):
     if avg_loss == 0:
         return 100.0 if avg_gain > 0 else 50.0
 
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    relative_strength = avg_gain / avg_loss
+
+    return 100 - (100 / (1 + relative_strength))
 
 
 def analyze_market(candles):
     candles = sorted(candles, key=lambda candle: candle["time"])
-    closes = [float(candle["close"]) for candle in candles]
+
+    closes = [
+        float(candle["close"])
+        for candle in candles
+    ]
 
     fast_ema = ema(closes, 9)
     slow_ema = ema(closes, 21)
 
-    # Align EMA9 and EMA21 to the same candles
+    # Align EMA9 and EMA21 to identical candle positions.
     fast_aligned = fast_ema[-len(slow_ema):]
 
     fast_previous = fast_aligned[-2]
@@ -103,7 +113,7 @@ def analyze_market(candles):
     current_rsi = rsi(closes, 14)
 
     direction = "NO SIGNAL"
-    reason = "EMA crossover and RSI conditions not matched"
+    reason = "Conditions not matched"
 
     if (
         fast_previous <= slow_previous
@@ -142,14 +152,9 @@ if __name__ == "__main__":
     result = analyze_market(candles)
 
     print("\n========== MARKET ANALYSIS ==========")
-    print("PAIR:", result["pair"])
-    print("TIMEFRAME:", result["timeframe"])
-    print("PREVIOUS EMA9:", result["ema9_previous"])
-    print("CURRENT EMA9:", result["ema9"])
-    print("PREVIOUS EMA21:", result["ema21_previous"])
-    print("CURRENT EMA21:", result["ema21"])
-    print("RSI:", result["rsi"])
-    print("DIRECTION:", result["direction"])
-    print("REASON:", result["reason"])
-    print("CANDLE TIME:", result["candle_time"])
+
+    for key, value in result.items():
+        print(f"{key.upper()}: {value}")
+
     print("=====================================")
+    
