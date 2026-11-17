@@ -1,11 +1,10 @@
-
 name: Professional Telegram Bot
 
 on:
   workflow_dispatch:
 
 jobs:
-  quotex-test:
+  signal-test:
     runs-on: ubuntu-latest
     timeout-minutes: 4
 
@@ -21,8 +20,8 @@ jobs:
       - name: Install requirements
         run: pip install -r requirements.txt
 
-      - name: Test Quotex API
+      - name: Test Signal Engine
         env:
           OTCHARTS_API_KEY: ${{ secrets.OTCHARTS_API_KEY }}
-        run: python test_quotex.py
-
+        run: python signal_engine.py
+        
