@@ -1,9 +1,4 @@
-
-import os
-import json
 from datetime import datetime
-from zoneinfo import ZoneInfo
-
 from config import DAILY_MESSAGES
 from daily_messages import (
     MORNING_MESSAGE,
@@ -11,9 +6,7 @@ from daily_messages import (
     GOOD_NIGHT_MESSAGE,
 )
 from bot import send_message
-
-TZ = ZoneInfo("Asia/Kolkata")
-STATE_FILE = "bot_state.json"
+from state import load_state, save_state
 
 MESSAGES = {
     "morning": MORNING_MESSAGE,
@@ -22,29 +15,15 @@ MESSAGES = {
 }
 
 
-def load_state():
-    if not os.path.exists(STATE_FILE):
-        return {}
-
-    try:
-        with open(STATE_FILE, "r") as file:
-            return json.load(file)
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def save_state(state):
-    temp_file = STATE_FILE + ".tmp"
-
-    with open(temp_file, "w") as file:
-        json.dump(state, file, indent=2)
-
-    os.replace(temp_file, STATE_FILE)
-
-
 def check_daily_messages():
-    now = datetime.now(TZ)
+    now = datetime.now().astimezone()
     today = now.strftime("%Y-%m-%d")
+
+    # India timezone
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    today = now.strftime("%Y-%m-%d")
+
     state = load_state()
 
     for name, scheduled_time in DAILY_MESSAGES.items():
@@ -60,10 +39,10 @@ def check_daily_messages():
             continue
 
         send_message(MESSAGES[name])
+
         state[key] = True
         save_state(state)
 
 
 if __name__ == "__main__":
     check_daily_messages()
-
