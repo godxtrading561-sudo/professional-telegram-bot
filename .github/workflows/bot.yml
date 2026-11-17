@@ -23,10 +23,11 @@ jobs:
       - name: Install requirements
         run: pip install -r requirements.txt
 
-      - name: Run scheduler
+      - name: Run Supabase connection test
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python scheduler.py
+        run: python test_supabase.py
+        
