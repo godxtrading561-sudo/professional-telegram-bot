@@ -33,7 +33,9 @@ def get_candles():
     candles = data.get("candles", [])
 
     if len(candles) < 30:
-        raise RuntimeError("Not enough candles for analysis")
+        raise RuntimeError(
+            f"Not enough candles received: {len(candles)}"
+        )
 
     if data.get("symbol") != PAIR:
         raise RuntimeError("Returned pair does not match requested pair")
@@ -124,10 +126,16 @@ def analyze_market(candles):
 
 if __name__ == "__main__":
     print("Downloading Quotex candles...")
-    candles = get_candles()
 
+    candles = get_candles()
     result = analyze_market(candles)
 
-    print("MARKET ANALYSIS")
-    print(result)
-      
+    print("\n========== MARKET ANALYSIS ==========")
+    print("PAIR:", result["pair"])
+    print("TIMEFRAME:", result["timeframe"])
+    print("EMA9:", result["ema9"])
+    print("EMA21:", result["ema21"])
+    print("RSI:", result["rsi"])
+    print("CANDLE TIME:", result["candle_time"])
+    print("DIRECTION:", result["direction"])
+    print("=====================================")
