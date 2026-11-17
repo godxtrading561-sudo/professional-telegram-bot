@@ -33,7 +33,9 @@ def get_candles():
     candles = data.get("candles", [])
 
     if len(candles) < 30:
-        raise RuntimeError("Not enough candles for analysis")
+        raise RuntimeError(
+            f"Not enough candles received: {len(candles)}"
+        )
 
     if data.get("symbol") != PAIR:
         raise RuntimeError("Returned pair does not match requested pair")
@@ -47,8 +49,8 @@ def ema(values, period):
 
     for price in values[period:]:
         result.append(
-            (price * multiplier)
-            + (result[-1] * (1 - multiplier))
+            price * multiplier
+            + result[-1] * (1 - multiplier)
         )
 
     return result
@@ -78,8 +80,8 @@ def rsi(values, period=14):
     if avg_loss == 0:
         return 100.0 if avg_gain > 0 else 50.0
 
-    relative_strength = avg_gain / avg_loss
-    return 100 - (100 / (1 + relative_strength))
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
 
 def analyze_market(candles):
@@ -88,14 +90,20 @@ def analyze_market(candles):
 
     fast_ema = ema(closes, 9)
     slow_ema = ema(closes, 21)
+
+    # Align EMA9 and EMA21 to the same candles
+    fast_aligned = fast_ema[-len(slow_ema):]
+
+    fast_previous = fast_aligned[-2]
+    fast_now = fast_aligned[-1]
+
+    slow_previous = slow_ema[-2]
+    slow_now = slow_ema[-1]
+
     current_rsi = rsi(closes, 14)
 
-    fast_now = fast_ema[-1]
-    slow_now = slow_ema[-1]
-    fast_previous = fast_ema[-2]
-    slow_previous = slow_ema[-2]
-
     direction = "NO SIGNAL"
+    reason = "EMA crossover and RSI conditions not matched"
 
     if (
         fast_previous <= slow_previous
@@ -103,6 +111,7 @@ def analyze_market(candles):
         and 50 < current_rsi < 70
     ):
         direction = "CALL"
+        reason = "Bullish EMA crossover with RSI confirmation"
 
     elif (
         fast_previous >= slow_previous
@@ -110,13 +119,17 @@ def analyze_market(candles):
         and 30 < current_rsi < 50
     ):
         direction = "PUT"
+        reason = "Bearish EMA crossover with RSI confirmation"
 
     return {
         "pair": PAIR,
         "timeframe": "1 Minute",
         "direction": direction,
+        "reason": reason,
         "rsi": round(current_rsi, 2),
+        "ema9_previous": round(fast_previous, 6),
         "ema9": round(fast_now, 6),
+        "ema21_previous": round(slow_previous, 6),
         "ema21": round(slow_now, 6),
         "candle_time": candles[-1]["time"],
     }
@@ -124,10 +137,19 @@ def analyze_market(candles):
 
 if __name__ == "__main__":
     print("Downloading Quotex candles...")
-    candles = get_candles()
 
+    candles = get_candles()
     result = analyze_market(candles)
 
-    print("MARKET ANALYSIS")
-    print(result)
-      
+    print("\n========== MARKET ANALYSIS ==========")
+    print("PAIR:", result["pair"])
+    print("TIMEFRAME:", result["timeframe"])
+    print("PREVIOUS EMA9:", result["ema9_previous"])
+    print("CURRENT EMA9:", result["ema9"])
+    print("PREVIOUS EMA21:", result["ema21_previous"])
+    print("CURRENT EMA21:", result["ema21"])
+    print("RSI:", result["rsi"])
+    print("DIRECTION:", result["direction"])
+    print("REASON:", result["reason"])
+    print("CANDLE TIME:", result["candle_time"])
+    print("=====================================")
