@@ -1,12 +1,13 @@
+
 name: Professional Telegram Bot
 
 on:
   workflow_dispatch:
 
 jobs:
-  signal-test:
+  backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 5
 
     steps:
       - name: Get repository code
@@ -20,8 +21,8 @@ jobs:
       - name: Install requirements
         run: pip install -r requirements.txt
 
-      - name: Test Signal Engine
+      - name: Run Strategy Backtest
         env:
           OTCHARTS_API_KEY: ${{ secrets.OTCHARTS_API_KEY }}
-        run: python signal_engine.py
+        run: python backtest.py
         
