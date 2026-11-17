@@ -1,4 +1,7 @@
+
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from config import DAILY_MESSAGES
 from daily_messages import (
     MORNING_MESSAGE,
@@ -8,6 +11,8 @@ from daily_messages import (
 from bot import send_message
 from state import load_state, save_state
 
+TZ = ZoneInfo("Asia/Kolkata")
+
 MESSAGES = {
     "morning": MORNING_MESSAGE,
     "schedule": SCHEDULE_MESSAGE,
@@ -16,14 +21,8 @@ MESSAGES = {
 
 
 def check_daily_messages():
-    now = datetime.now().astimezone()
+    now = datetime.now(TZ)
     today = now.strftime("%Y-%m-%d")
-
-    # India timezone
-    from zoneinfo import ZoneInfo
-    now = datetime.now(ZoneInfo("Asia/Kolkata"))
-    today = now.strftime("%Y-%m-%d")
-
     state = load_state()
 
     for name, scheduled_time in DAILY_MESSAGES.items():
@@ -39,10 +38,10 @@ def check_daily_messages():
             continue
 
         send_message(MESSAGES[name])
-
         state[key] = True
         save_state(state)
 
 
 if __name__ == "__main__":
+    send_message("🤖 PROFESSIONAL BOT SCHEDULER TEST SUCCESSFUL! ✅")
     check_daily_messages()
