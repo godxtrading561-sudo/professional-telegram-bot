@@ -1,4 +1,6 @@
 
+import time
+import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -10,8 +12,9 @@ from daily_messages import (
 )
 from bot import send_message
 from state import load_state, save_state
+from session_controller import check_session_start
 
-TZ = ZoneInfo("Asia/Kolkata")
+IST = ZoneInfo("Asia/Kolkata")
 
 MESSAGES = {
     "morning": MORNING_MESSAGE,
@@ -19,16 +22,23 @@ MESSAGES = {
     "good_night": GOOD_NIGHT_MESSAGE,
 }
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+
+logger = logging.getLogger("scheduler")
+
 
 def check_daily_messages():
-    now = datetime.now(TZ)
+    now = datetime.now(IST)
     today = now.strftime("%Y-%m-%d")
     state = load_state()
 
     for name, scheduled_time in DAILY_MESSAGES.items():
         if (now.hour, now.minute) != (
             scheduled_time.hour,
-            scheduled_time.minute
+            scheduled_time.minute,
         ):
             continue
 
@@ -41,7 +51,21 @@ def check_daily_messages():
         state[key] = True
         save_state(state)
 
+        logger.info("Daily message sent: %s", name)
+
+
+def run_scheduler():
+    logger.info("Professional Bot scheduler started (IST)")
+
+    while True:
+        try:
+            check_daily_messages()
+            check_session_start()
+        except Exception:
+            logger.exception("Scheduler cycle failed")
+
+        time.sleep(10)
+
 
 if __name__ == "__main__":
-    send_message("🤖 PROFESSIONAL BOT SCHEDULER TEST SUCCESSFUL! ✅")
-    check_daily_messages()
+    run_scheduler()
