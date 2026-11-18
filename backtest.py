@@ -13,24 +13,27 @@ TRAIN_RATIO = 0.70
 
 def simulate(candles, start, end, expiry):
     trades = []
+    next_available_entry = start
 
-    for i in range(max(start, MIN_HISTORY), end - expiry):
+    for i in range(max(start, MIN_HISTORY - 1), end - expiry):
+        entry_index = i + 1
+        exit_index = entry_index + expiry - 1
+
+        # Prevent overlapping trades in this expiry test.
+        if entry_index < next_available_entry:
+            continue
+
         history = candles[:i + 1]
 
         try:
             signal = analyze_market(history)
-        except (ValueError, RuntimeError):
+        except (ValueError, RuntimeError, KeyError):
             continue
 
-        direction = signal["direction"]
+        direction = signal.get("direction")
 
         if direction not in ("CALL", "PUT"):
             continue
-
-        # Signal is formed at candle i close.
-        # Entry is next candle open.
-        entry_index = i + 1
-        exit_index = entry_index + expiry - 1
 
         entry = candles[entry_index]["open"]
         exit_price = candles[exit_index]["close"]
@@ -55,7 +58,14 @@ def simulate(candles, start, end, expiry):
             "exit": exit_price,
             "outcome": outcome,
             "expiry": expiry,
+            "score": (
+                signal.get("bullish_score", 0)
+                if direction == "CALL"
+                else signal.get("bearish_score", 0)
+            ),
         })
+
+        next_available_entry = exit_index + 1
 
     return trades
 
@@ -67,20 +77,20 @@ def report(trades, title):
 
     decided = wins + losses
 
-    call = [t for t in trades if t["direction"] == "CALL"]
-    put = [t for t in trades if t["direction"] == "PUT"]
+    calls = [t for t in trades if t["direction"] == "CALL"]
+    puts = [t for t in trades if t["direction"] == "PUT"]
 
-    call_wins = sum(t["outcome"] == "WIN" for t in call)
-    call_losses = sum(t["outcome"] == "LOSS" for t in call)
+    call_wins = sum(t["outcome"] == "WIN" for t in calls)
+    call_losses = sum(t["outcome"] == "LOSS" for t in calls)
 
-    put_wins = sum(t["outcome"] == "WIN" for t in put)
-    put_losses = sum(t["outcome"] == "LOSS" for t in put)
+    put_wins = sum(t["outcome"] == "WIN" for t in puts)
+    put_losses = sum(t["outcome"] == "LOSS" for t in puts)
 
-    gross_profit = 0.0
-    gross_loss = 0.0
     equity = 0.0
     peak = 0.0
     max_drawdown = 0.0
+    consecutive_losses = 0
+    max_consecutive_losses = 0
 
     for trade in trades:
         if trade["outcome"] == "TIE":
@@ -95,10 +105,14 @@ def report(trades, title):
         peak = max(peak, equity)
         max_drawdown = max(max_drawdown, peak - equity)
 
-        if change > 0:
-            gross_profit += change
-        elif change < 0:
-            gross_loss += abs(change)
+        if trade["outcome"] == "LOSS":
+            consecutive_losses += 1
+            max_consecutive_losses = max(
+                max_consecutive_losses,
+                consecutive_losses,
+            )
+        else:
+            consecutive_losses = 0
 
     print(f"\n========== {title} ==========")
     print("TOTAL TRADES:", len(trades))
@@ -109,62 +123,51 @@ def report(trades, title):
     if decided:
         print("WIN RATE:", round(wins / decided * 100, 2), "%")
     else:
-        print("WIN RATE: No decided trades")
+        print("WIN RATE: N/A")
 
     call_total = call_wins + call_losses
     put_total = put_wins + put_losses
 
     print(
         "CALL WIN RATE:",
-        round(call_wins / call_total * 100, 2) if call_total else "N/A"
+        round(call_wins / call_total * 100, 2) if call_total else "N/A",
     )
     print(
         "PUT WIN RATE:",
-        round(put_wins / put_total * 100, 2) if put_total else "N/A"
+        round(put_wins / put_total * 100, 2) if put_total else "N/A",
     )
 
-    if gross_loss:
-        profit_factor = gross_profit / gross_loss
-        print("PRICE-MOVE PROFIT FACTOR:", round(profit_factor, 3))
-    elif gross_profit:
-        print("PRICE-MOVE PROFIT FACTOR: Infinite (no losing price moves)")
-    else:
-        print("PRICE-MOVE PROFIT FACTOR: N/A")
-
     print("MAX DRAWDOWN (PRICE UNITS):", round(max_drawdown, 8))
+    print("MAX CONSECUTIVE LOSSES:", max_consecutive_losses)
     print("================================")
 
 
 def main():
     print("Downloading historical candles...")
-    candles = validate_candles(get_candles())
 
+    candles = validate_candles(get_candles())
     count = len(candles)
     split = int(count * TRAIN_RATIO)
 
     print("PAIR:", PAIR)
     print("VALID CANDLES:", count)
     print("TRAIN CANDLES:", split)
-    print("TEST CANDLES:", count - split)
+    print("UNSEEN TEST CANDLES:", count - split)
 
     if split < MIN_HISTORY + 10:
-        raise RuntimeError(
-            "Not enough training data for chronological testing"
-        )
+        raise RuntimeError("Not enough training history")
 
     if count - split < 10:
-        raise RuntimeError("Not enough unseen test candles")
+        raise RuntimeError("Not enough unseen test history")
 
     for expiry in EXPIRIES:
         train_trades = simulate(
             candles,
-            MIN_HISTORY,
+            MIN_HISTORY - 1,
             split,
             expiry,
         )
 
-        # Test uses only the later chronological section.
-        # Earlier candles are retained as indicator warm-up history.
         test_trades = simulate(
             candles,
             split,
@@ -172,12 +175,11 @@ def main():
             expiry,
         )
 
-        print(f"\n\n######## EXPIRY: {expiry} MINUTE(S) ########")
-
+        print(f"\n######## EXPIRY: {expiry} MINUTE(S) ########")
         report(train_trades, "TRAINING RESULTS")
-        report(test_trades, "OUT-OF-SAMPLE TEST RESULTS")
+        report(test_trades, "UNSEEN TEST RESULTS")
 
 
 if __name__ == "__main__":
     main()
-        
+    
