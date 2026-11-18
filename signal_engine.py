@@ -1,621 +1,234 @@
-
-import os
-import math
-import requests
+import os, math, requests
+from statistics import mean
 
 API_KEY = os.environ["OTCHARTS_API_KEY"]
 API_URL = "https://otcharts.com/v1/candles"
+PAIR, TIMEFRAME, CANDLE_LIMIT = "EURUSD_otc", 60, 1000
+MIN_CANDLES, MIN_SCORE, MIN_VOTE_MARGIN = 220, 7, 2
 
-PAIR = "EURUSD_otc"
-TIMEFRAME = 60
-CANDLE_LIMIT = 1000
-
-MIN_CANDLES = 220
-MIN_SCORE = 7
-
-
-# ---------------- DATA ----------------
-
-def validate_candles(candles):
-    cleaned = []
-    seen = set()
-
-    for candle in candles:
+def validate_candles(raw):
+    out, seen = [], set()
+    for c in raw:
         try:
-            item = {
-                "time": candle["time"],
-                "open": float(candle["open"]),
-                "high": float(candle["high"]),
-                "low": float(candle["low"]),
-                "close": float(candle["close"]),
-            }
-
-            values = [
-                item["open"], item["high"],
-                item["low"], item["close"]
-            ]
-
-            if not all(math.isfinite(v) for v in values):
-                continue
-
-            if item["high"] < max(values):
-                continue
-
-            if item["low"] > min(values):
-                continue
-
-            if item["time"] in seen:
-                continue
-
-            seen.add(item["time"])
-            cleaned.append(item)
-
-        except (KeyError, TypeError, ValueError):
-            continue
-
-    return sorted(cleaned, key=lambda x: x["time"])
-
+            x = {k: (c[k] if k == "time" else float(c[k])) for k in ("time","open","high","low","close")}
+            vals = [x[k] for k in ("open","high","low","close")]
+            if not all(math.isfinite(v) for v in vals): continue
+            if x["high"] < max(vals) or x["low"] > min(vals) or x["high"] < x["low"]: continue
+            if x["time"] in seen: continue
+            seen.add(x["time"]); out.append(x)
+        except (KeyError, TypeError, ValueError): continue
+    return sorted(out, key=lambda x: x["time"])
 
 def get_candles():
-    response = requests.get(
-        API_URL,
-        headers={
-            "Authorization": f"Bearer {API_KEY}",
-            "Accept": "application/json",
-        },
-        params={
-            "venue": "quotex",
-            "symbol": PAIR,
-            "tf": TIMEFRAME,
-            "limit": CANDLE_LIMIT,
-        },
-        timeout=30,
-    )
-
-    response.raise_for_status()
-    data = response.json()
-
-    if data.get("symbol") != PAIR:
-        raise RuntimeError("Market symbol mismatch")
-
-    candles = validate_candles(data.get("candles", []))
-
-    print("Requested:", CANDLE_LIMIT)
-    print("Received valid candles:", len(candles))
-
-    if len(candles) < MIN_CANDLES:
-        raise RuntimeError("Not enough valid candles")
-
-    return candles
-
-
-# ---------------- INDICATORS ----------------
-
-def ema(values, period):
-    if len(values) < period:
-        raise ValueError("Not enough EMA data")
-
-    multiplier = 2 / (period + 1)
-    result = [sum(values[:period]) / period]
-
-    for value in values[period:]:
-        result.append(
-            value * multiplier
-            + result[-1] * (1 - multiplier)
-        )
-
-    return result
-
-
-def rsi(values, period=14):
-    changes = [
-        values[i] - values[i - 1]
-        for i in range(1, len(values))
-    ]
-
-    gains = [max(x, 0) for x in changes]
-    losses = [max(-x, 0) for x in changes]
-
-    gain = sum(gains[:period]) / period
-    loss = sum(losses[:period]) / period
-
-    for i in range(period, len(gains)):
-        gain = (gain * (period - 1) + gains[i]) / period
-        loss = (loss * (period - 1) + losses[i]) / period
-
-    if loss == 0:
-        return 100.0 if gain else 50.0
-
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-
-def macd(values, fast=12, slow=26, signal=9):
-    fast_line = ema(values, fast)
-    slow_line = ema(values, slow)
-
-    fast_line = fast_line[-len(slow_line):]
-
-    line = [
-        a - b for a, b in zip(fast_line, slow_line)
-    ]
-
-    signal_line = ema(line, signal)
-
-    return line[-1], signal_line[-1]
-
-
-def atr(candles, period=14):
-    ranges = []
-
-    for i in range(1, len(candles)):
-        current = candles[i]
-        previous_close = candles[i - 1]["close"]
-
-        ranges.append(max(
-            current["high"] - current["low"],
-            abs(current["high"] - previous_close),
-            abs(current["low"] - previous_close),
-        ))
-
-    if len(ranges) < period:
-        raise ValueError("Not enough ATR data")
-
-    value = sum(ranges[:period]) / period
-
-    for item in ranges[period:]:
-        value = (value * (period - 1) + item) / period
-
-    return value
-
-
-def adx(candles, period=14):
-    tr_values = []
-    plus_dm = []
-    minus_dm = []
-
-    for i in range(1, len(candles)):
-        current = candles[i]
-        previous = candles[i - 1]
-
-        up = current["high"] - previous["high"]
-        down = previous["low"] - current["low"]
-
-        plus_dm.append(up if up > down and up > 0 else 0)
-        minus_dm.append(down if down > up and down > 0 else 0)
-
-        tr_values.append(max(
-            current["high"] - current["low"],
-            abs(current["high"] - previous["close"]),
-            abs(current["low"] - previous["close"]),
-        ))
-
-    if len(tr_values) < period * 2:
-        raise ValueError("Not enough ADX data")
-
-    tr = sum(tr_values[:period])
-    plus = sum(plus_dm[:period])
-    minus = sum(minus_dm[:period])
-
-    dx_values = []
-
-    for i in range(period, len(tr_values)):
-        tr += (tr_values[i] - tr) / period
-        plus += (plus_dm[i] - plus) / period
-        minus += (minus_dm[i] - minus) / period
-
-        pdi = 100 * plus / tr if tr else 0
-        mdi = 100 * minus / tr if tr else 0
-        total = pdi + mdi
-
-        dx_values.append(
-            100 * abs(pdi - mdi) / total if total else 0
-        )
-
-    if len(dx_values) < period:
-        raise ValueError("Not enough ADX values")
-
-    value = sum(dx_values[:period]) / period
-
-    for item in dx_values[period:]:
-        value = (value * (period - 1) + item) / period
-
-    return value
-
-
-# ---------------- SUPPORT / RESISTANCE ----------------
-
-def find_levels(candles, lookback=100, strength=2):
-    sample = candles[-lookback:]
-    supports = []
-    resistances = []
-
-    for i in range(strength, len(sample) - strength):
-        current = sample[i]
-
-        left = sample[i - strength:i]
-        right = sample[i + 1:i + strength + 1]
-
-        if all(current["low"] < x["low"] for x in left + right):
-            supports.append(current["low"])
-
-        if all(current["high"] > x["high"] for x in left + right):
-            resistances.append(current["high"])
-
-    return supports, resistances
-
-
-def nearest_level(price, levels):
-    if not levels:
-        return None
-
-    return min(levels, key=lambda level: abs(price - level))
-
-
-# ---------------- SNR / SUPPLY / DEMAND ----------------
-
-def analyze_zones(candles, current_atr):
-    supports, resistances = find_levels(candles)
-
-    price = candles[-1]["close"]
-    tolerance = max(current_atr * 0.35, price * 0.00005)
-
-    support = nearest_level(price, supports)
-    resistance = nearest_level(price, resistances)
-
-    near_support = (
-        support is not None
-        and abs(price - support) <= tolerance
-    )
-
-    near_resistance = (
-        resistance is not None
-        and abs(price - resistance) <= tolerance
-    )
-
-    # Simplified swing-based supply and demand zones.
-    demand_zone = None
-    supply_zone = None
-
-    recent = candles[-60:]
-
-    for i in range(2, len(recent) - 2):
-        candle = recent[i]
-        following = recent[i + 1:i + 3]
-
-        upward_move = (
-            min(x["close"] for x in following) - candle["high"]
-        )
-
-        downward_move = (
-            candle["low"] - max(x["close"] for x in following)
-        )
-
-        if upward_move > current_atr:
-            demand_zone = (candle["low"], candle["high"])
-
-        if downward_move > current_atr:
-            supply_zone = (candle["low"], candle["high"])
-
-    in_demand = (
-        demand_zone is not None
-        and demand_zone[0] - tolerance <= price <= demand_zone[1] + tolerance
-    )
-
-    in_supply = (
-        supply_zone is not None
-        and supply_zone[0] - tolerance <= price <= supply_zone[1] + tolerance
-    )
-
-    # SNR flip: price crossing a previous swing level.
-    previous = candles[-2]
-
-    support_flip = any(
-        previous["close"] < level <= price
-        for level in resistances
-    )
-
-    resistance_flip = any(
-        previous["close"] > level >= price
-        for level in supports
-    )
-
-    return {
-        "support": support,
-        "resistance": resistance,
-        "near_support": near_support,
-        "near_resistance": near_resistance,
-        "demand_zone": demand_zone,
-        "supply_zone": supply_zone,
-        "in_demand": in_demand,
-        "in_supply": in_supply,
-        "support_flip": support_flip,
-        "resistance_flip": resistance_flip,
-    }
-
-
-# ---------------- CANDLESTICK PATTERNS ----------------
-
-def candlestick_analysis(candles):
-    current = candles[-1]
-    previous = candles[-2]
-
-    body = abs(current["close"] - current["open"])
-    candle_range = current["high"] - current["low"]
-
-    if candle_range <= 0:
-        return "NONE"
-
-    upper_wick = current["high"] - max(
-        current["open"], current["close"]
-    )
-    lower_wick = min(
-        current["open"], current["close"]
-    ) - current["low"]
-
-    bullish_engulfing = (
-        previous["close"] < previous["open"]
-        and current["close"] > current["open"]
-        and current["open"] <= previous["close"]
-        and current["close"] >= previous["open"]
-    )
-
-    bearish_engulfing = (
-        previous["close"] > previous["open"]
-        and current["close"] < current["open"]
-        and current["open"] >= previous["close"]
-        and current["close"] <= previous["open"]
-    )
-
-    hammer = (
-        lower_wick >= body * 2
-        and upper_wick <= body
-        and current["close"] > current["open"]
-    )
-
-    shooting_star = (
-        upper_wick >= body * 2
-        and lower_wick <= body
-        and current["close"] < current["open"]
-    )
-
-    if bullish_engulfing:
-        return "BULLISH_ENGULFING"
-
-    if bearish_engulfing:
-        return "BEARISH_ENGULFING"
-
-    if hammer:
-        return "HAMMER"
-
-    if shooting_star:
-        return "SHOOTING_STAR"
-
-    return "NONE"
-
-
-# ---------------- CHART PATTERNS ----------------
-
-def chart_pattern_analysis(candles, current_atr):
-    supports, resistances = find_levels(candles, lookback=80)
-
-    if len(candles) < 20:
-        return "NONE"
-
-    price = candles[-1]["close"]
-    tolerance = current_atr * 0.35
-
-    # Approximate double top / double bottom.
-    recent_highs = sorted(
-        [x["high"] for x in candles[-30:]],
-        reverse=True
-    )[:2]
-
-    recent_lows = sorted(
-        [x["low"] for x in candles[-30:]]
-    )[:2]
-
-    if (
-        abs(recent_highs[0] - recent_highs[1]) <= tolerance
-        and price < recent_highs[0]
-    ):
-        return "POSSIBLE_DOUBLE_TOP"
-
-    if (
-        abs(recent_lows[0] - recent_lows[1]) <= tolerance
-        and price > recent_lows[0]
-    ):
-        return "POSSIBLE_DOUBLE_BOTTOM"
-
-    if resistances and price > max(resistances):
-        return "RESISTANCE_BREAKOUT"
-
-    if supports and price < min(supports):
-        return "SUPPORT_BREAKDOWN"
-
-    return "NONE"
-
-
-# ---------------- CONFLUENCE ENGINE ----------------
+    r = requests.get(API_URL, headers={"Authorization": f"Bearer {API_KEY}", "Accept":"application/json"},
+        params={"venue":"quotex","symbol":PAIR,"tf":TIMEFRAME,"limit":CANDLE_LIMIT}, timeout=30)
+    r.raise_for_status(); data = r.json()
+    if data.get("symbol") != PAIR: raise RuntimeError("Market symbol mismatch")
+    cs = validate_candles(data.get("candles", []))
+    print("Requested:", CANDLE_LIMIT, "Received:", len(cs))
+    if len(cs) < MIN_CANDLES: raise RuntimeError("Not enough valid candles")
+    return cs
+
+def ema(v,p):
+    if len(v)<p: raise ValueError(f"Not enough EMA{p} data")
+    k=2/(p+1); out=[mean(v[:p])]
+    for x in v[p:]: out.append(x*k+out[-1]*(1-k))
+    return out
+
+def sma(v,p):
+    if len(v)<p: raise ValueError(f"Not enough SMA{p} data")
+    return [mean(v[max(0,i-p+1):i+1]) for i in range(len(v))]
+
+def rsi_series(v,p=14):
+    d=[v[i]-v[i-1] for i in range(1,len(v))]
+    g=[max(x,0) for x in d]; l=[max(-x,0) for x in d]
+    ag,al=mean(g[:p]),mean(l[:p]); out=[50.0]*p
+    def val(a,b): return 100 if b==0 and a else (50 if b==0 else 100-100/(1+a/b))
+    out.append(val(ag,al))
+    for i in range(p,len(g)):
+        ag=(ag*(p-1)+g[i])/p; al=(al*(p-1)+l[i])/p; out.append(val(ag,al))
+    return out
+
+def rsi(v,p=14): return rsi_series(v,p)[-1]
+
+def macd_series(v):
+    f,s=ema(v,12),ema(v,26); line=[a-b for a,b in zip(f[-len(s):],s)]
+    return line,ema(line,9)
+
+def macd(v):
+    a,b=macd_series(v); return a[-1],b[-1]
+
+def true_ranges(cs):
+    return [max(cs[i]["high"]-cs[i]["low"],abs(cs[i]["high"]-cs[i-1]["close"]),abs(cs[i]["low"]-cs[i-1]["close"])) for i in range(1,len(cs))]
+
+def atr(cs,p=14):
+    t=true_ranges(cs); x=mean(t[:p])
+    for z in t[p:]: x=(x*(p-1)+z)/p
+    return x
+
+def adx(cs,p=14):
+    tr=[]; plus=[]; minus=[]
+    for i in range(1,len(cs)):
+        c,q=cs[i],cs[i-1]; up=c["high"]-q["high"]; dn=q["low"]-c["low"]
+        tr.append(max(c["high"]-c["low"],abs(c["high"]-q["close"]),abs(c["low"]-q["close"])))
+        plus.append(up if up>dn and up>0 else 0); minus.append(dn if dn>up and dn>0 else 0)
+    t,a,b=sum(tr[:p]),sum(plus[:p]),sum(minus[:p]); dx=[]
+    for i in range(p,len(tr)):
+        t+=(tr[i]-t)/p; a+=(plus[i]-a)/p; b+=(minus[i]-b)/p
+        x,y=(100*a/t,100*b/t) if t else (0,0); dx.append(100*abs(x-y)/(x+y) if x+y else 0)
+    z=mean(dx[:p])
+    for q in dx[p:]: z=(z*(p-1)+q)/p
+    return z
+
+def bollinger(v,p=20,m=2):
+    w=v[-p:]; mid=mean(w); sd=math.sqrt(mean((x-mid)**2 for x in w))
+    return mid+m*sd,mid-m*sd
+
+def cci(cs,p=14):
+    t=[(x["high"]+x["low"]+x["close"])/3 for x in cs[-p:]]; a=mean(t); d=mean(abs(x-a) for x in t)
+    return (t[-1]-a)/(.015*d) if d else 0
+
+def williams(cs,p=14):
+    w=cs[-p:]; h=max(x["high"] for x in w); l=min(x["low"] for x in w)
+    return -100*(h-w[-1]["close"])/(h-l) if h!=l else 0
+
+def demarker(cs,p=14):
+    u=[]; d=[]
+    for i in range(-p,0):
+        u.append(max(cs[i]["high"]-cs[i-1]["high"],0)); d.append(max(cs[i-1]["low"]-cs[i]["low"],0))
+    a,b=mean(u),mean(d); return a/(a+b) if a+b else .5
+
+def levels(cs,n=100):
+    s=[]; r=[]; w=cs[-n:]
+    for i in range(2,len(w)-2):
+        q=w[i]; near=w[i-2:i]+w[i+1:i+3]
+        if all(q["low"]<x["low"] for x in near): s.append(q["low"])
+        if all(q["high"]>x["high"] for x in near): r.append(q["high"])
+    return s,r
+
+def patterns(cs):
+    c,p=cs[-1],cs[-2]; body=abs(c["close"]-c["open"]); rng=max(c["high"]-c["low"],1e-12)
+    up=c["high"]-max(c["open"],c["close"]); dn=min(c["open"],c["close"])-c["low"]; out=set()
+    if p["close"]<p["open"] and c["close"]>c["open"] and c["open"]<=p["close"] and c["close"]>=p["open"]: out.add("BULL_ENGULF")
+    if p["close"]>p["open"] and c["close"]<c["open"] and c["open"]>=p["close"] and c["close"]<=p["open"]: out.add("BEAR_ENGULF")
+    if dn>=2*body and up<.25*rng and c["close"]>c["open"]: out.add("HAMMER")
+    if up>=2*body and dn<.25*rng and c["close"]<c["open"]: out.add("STAR")
+    if body<.1*rng: out.add("DOJI")
+    if len(cs)>=3:
+        a,b,d=cs[-3:]
+        if a["close"]<a["open"] and abs(a["close"]-a["open"])>.5*(a["high"]-a["low"]) and abs(b["close"]-b["open"])<.3*(b["high"]-b["low"]) and d["close"]>d["open"] and d["close"]>(a["open"]+a["close"])/2: out.add("MORNING_STAR")
+        if a["close"]>a["open"] and abs(a["close"]-a["open"])>.5*(a["high"]-a["low"]) and abs(b["close"]-b["open"])<.3*(b["high"]-b["low"]) and d["close"]<d["open"] and d["close"]<(a["open"]+a["close"])/2: out.add("EVENING_STAR")
+    if len(cs)>=4 and all(x["close"]>x["open"] for x in cs[-4:-1]): out.add("THREE_GREEN")
+    if len(cs)>=4 and all(x["close"]<x["open"] for x in cs[-4:-1]): out.add("THREE_RED")
+    return out
 
 def analyze_market(candles):
-    candles = validate_candles(candles)
+    cs=validate_candles(candles)
+    if len(cs)<MIN_CANDLES: raise ValueError(f"Need at least {MIN_CANDLES} candles")
+    cl=[x["close"] for x in cs]; hi=[x["high"] for x in cs]; lo=[x["low"] for x in cs]; c,p=cs[-1],cs[-2]
+    a=atr(cs); rv=rsi_series(cl); ml,ms=macd_series(cl); pat=patterns(cs); sup,res=levels(cs)
+    near_s=bool(sup and abs(c["close"]-min(sup,key=lambda x:abs(x-c["close"])))<.35*a)
+    near_r=bool(res and abs(c["close"]-min(res,key=lambda x:abs(x-c["close"])))<.35*a)
+    e5,e6,e9,e14,e20,e21,e26,e50,e200=[ema(cl,x) for x in (5,6,9,14,20,21,26,50,200)]
+    s5,s50,s100=[sma(cl,x) for x in (5,50,100)]
+    bu,bl=bollinger(cl); oldbu,oldbl=bollinger(cl[:-10])
+    votes=[]; reasons=[]
+    def add(name,d,w=1):
+        if d in ("CALL","PUT"): votes.append((d,w)); reasons.append(name+"="+d)
+    # 1-15 Price action
+    add("01 support pin","CALL" if near_s and "HAMMER" in pat else None)
+    add("02 resistance star","PUT" if near_r and "STAR" in pat else None)
+    add("03 SBR retest","PUT" if p["close"]<c["close"] and near_r and c["close"]<c["open"] else None)
+    add("04 RBS retest","CALL" if near_s and c["close"]>c["open"] else None)
+    add("05 bullish engulf support","CALL" if near_s and "BULL_ENGULF" in pat else None)
+    add("06 bearish engulf resistance","PUT" if near_r and "BEAR_ENGULF" in pat else None)
+    add("07 morning star","CALL" if "MORNING_STAR" in pat else None)
+    add("08 evening star","PUT" if "EVENING_STAR" in pat else None)
+    add("09 three candle continuation","CALL" if "THREE_GREEN" in pat else ("PUT" if "THREE_RED" in pat else None))
+    add("10 exhaustion reversal","PUT" if sum(x["close"]>x["open"] for x in cs[-7:-1])>=5 and c["high"]-c["low"]>1.7*a and c["close"]<c["open"] else ("CALL" if sum(x["close"]<x["open"] for x in cs[-7:-1])>=5 and c["high"]-c["low"]>1.7*a and c["close"]>c["open"] else None))
+    add("11 inside bar break","CALL" if c["high"]<p["high"] and c["low"]>p["low"] and c["close"]>cs[-3]["high"] else ("PUT" if c["high"]<p["high"] and c["low"]>p["low"] and c["close"]<cs[-3]["low"] else None))
+    hh=sorted(hi[-30:],reverse=True)[:2]; ll=sorted(lo[-30:])[:2]
+    add("12 double top proxy","PUT" if abs(hh[0]-hh[1])<.3*a and c["close"]<min(lo[-15:]) else None)
+    add("13 double bottom proxy","CALL" if abs(ll[0]-ll[1])<.3*a and c["close"]>max(hi[-15:]) else None)
+    rn=round(c["close"]*2000)/2000
+    add("14 round number rejection","PUT" if abs(c["high"]-rn)<.12*a and c["close"]<c["open"] else ("CALL" if abs(c["low"]-rn)<.12*a and c["close"]>c["open"] else None))
+    gap=c["open"]-p["close"]
+    add("15 gap fill","PUT" if gap>.25*a and c["close"]<c["open"] else ("CALL" if gap<-.25*a and c["close"]>c["open"] else None))
+    # 16-22 trendline/channel approximations
+    add("16 ascending line bounce","CALL" if min(lo[-20:])==c["low"] and c["close"]>c["open"] else None)
+    add("17 descending line reject","PUT" if max(hi[-20:])==c["high"] and c["close"]<c["open"] else None)
+    add("18 trendline breakout proxy","CALL" if c["close"]>max(hi[-6:-1]) else ("PUT" if c["close"]<min(lo[-6:-1]) else None))
+    add("19 channel bounce","PUT" if c["high"]>=max(hi[-30:])-.15*a and c["close"]<c["open"] else ("CALL" if c["low"]<=min(lo[-30:])+.15*a and c["close"]>c["open"] else None))
+    add("20 triangle breakout proxy","CALL" if max(hi[-10:])-min(lo[-10:])<max(hi[-30:-20])-min(lo[-30:-20]) and c["close"]>max(hi[-10:-1]) else ("PUT" if max(hi[-10:])-min(lo[-10:])<max(hi[-30:-20])-min(lo[-30:-20]) and c["close"]<min(lo[-10:-1]) else None))
+    add("21 rising wedge breakdown proxy","PUT" if c["close"]<min(lo[-5:-1]) and mean(hi[-5:])>mean(hi[-10:-5]) else None)
+    add("22 falling wedge breakout proxy","CALL" if c["close"]>max(hi[-5:-1]) and mean(lo[-5:])<mean(lo[-10:-5]) else None)
+    # 23-30 averages
+    add("23 EMA cross","CALL" if e9[-2]<=e21[-2] and e9[-1]>e21[-1] else ("PUT" if e9[-2]>=e21[-2] and e9[-1]<e21[-1] else None))
+    add("24 EMA20 pullback","CALL" if c["close"]>e20[-1] and abs(c["low"]-e20[-1])<.2*a and c["close"]>c["open"] else ("PUT" if c["close"]<e20[-1] and abs(c["high"]-e20[-1])<.2*a and c["close"]<c["open"] else None))
+    add("25 SMA50 bounce","CALL" if c["close"]>s50[-1] and abs(c["low"]-s50[-1])<.2*a and c["close"]>c["open"] else ("PUT" if c["close"]<s50[-1] and abs(c["high"]-s50[-1])<.2*a and c["close"]<c["open"] else None))
+    add("26 EMA200 filter","CALL" if c["close"]>e200[-1] and e9[-1]>e21[-1] else ("PUT" if c["close"]<e200[-1] and e9[-1]<e21[-1] else None))
+    add("27 rainbow EMA","CALL" if e6[-1]>e14[-1]>e26[-1] and abs(c["close"]-e14[-1])<.2*a else ("PUT" if e6[-1]<e14[-1]<e26[-1] and abs(c["close"]-e14[-1])<.2*a else None))
+    add("28 SMA5 cross proxy","CALL" if p["close"]<=s5[-2]<c["close"] else ("PUT" if p["close"]>=s5[-2]>c["close"] else None))
+    add("29 EMA squeeze breakout","CALL" if abs(e9[-1]-e21[-1])<.08*a and c["close"]>max(hi[-5:-1]) else ("PUT" if abs(e9[-1]-e21[-1])<.08*a and c["close"]<min(lo[-5:-1]) else None))
+    add("30 SMA100 rejection","CALL" if abs(c["low"]-s100[-1])<.15*a and c["close"]>c["open"] else ("PUT" if abs(c["high"]-s100[-1])<.15*a and c["close"]<c["open"] else None))
+    # 31-40 oscillators
+    add("31 RSI reversal","PUT" if rv[-2]>70 and rv[-1]<70 else ("CALL" if rv[-2]<30 and rv[-1]>30 else None))
+    add("32 RSI divergence proxy","PUT" if max(hi[-8:])>max(hi[-16:-8]) and max(rv[-8:])<max(rv[-16:-8]) else ("CALL" if min(lo[-8:])<min(lo[-16:-8]) and min(rv[-8:])>min(rv[-16:-8]) else None))
+    add("33 RSI50 bounce","CALL" if e9[-1]>e21[-1] and rv[-2]<50<=rv[-1] else ("PUT" if e9[-1]<e21[-1] and rv[-2]>50>=rv[-1] else None))
+    # stochastic approximation from rolling high/low
+    stlo=min(lo[-14:]); sthi=max(hi[-14:]); sk=50 if sthi==stlo else 100*(c["close"]-stlo)/(sthi-stlo)
+    add("34 stochastic extreme","CALL" if sk<20 and c["close"]>c["open"] else ("PUT" if sk>80 and c["close"]<c["open"] else None))
+    add("35 MACD zero cross","CALL" if ml[-2]<=0<ml[-1] else ("PUT" if ml[-2]>=0>ml[-1] else None))
+    hist=[x-y for x,y in zip(ml[-len(ms):],ms)]
+    add("36 MACD histogram flip","CALL" if hist[-2]<=0<hist[-1] else ("PUT" if hist[-2]>=0>hist[-1] else None))
+    cv=cci(cs)
+    add("37 CCI extreme","PUT" if cv<100 and cci(cs[:-1])>200 else ("CALL" if cv>-100 and cci(cs[:-1])<-200 else None))
+    wr=williams(cs)
+    add("38 Williams bounce","PUT" if wr<-20 and williams(cs[:-1])>-20 else ("CALL" if wr>-80 and williams(cs[:-1])<-80 else None))
+    dm=demarker(cs)
+    add("39 DeMarker reversal","PUT" if dm<.7 and demarker(cs[:-1])>.7 else ("CALL" if dm>.3 and demarker(cs[:-1])<.3 else None))
+    # AO proxy: SMA5(mid)-SMA34(mid)
+    mids=[(x["high"]+x["low"])/2 for x in cs]; ao=sma(mids,5)[-1]-sma(mids,34)[-1]
+    add("40 AO momentum","CALL" if ao>0 and c["close"]>c["open"] else ("PUT" if ao<0 and c["close"]<c["open"] else None))
+    # 41-50 volatility/hybrid
+    add("41 Bollinger reversal","PUT" if p["close"]>bollinger(cl[:-1])[0] and c["close"]<bu and c["close"]<c["open"] else ("CALL" if p["close"]<bollinger(cl[:-1])[1] and c["close"]>bl and c["close"]>c["open"] else None))
+    add("42 Bollinger squeeze breakout","CALL" if bu-bl<oldbu-oldbl and c["close"]>bu else ("PUT" if bu-bl<oldbu-oldbl and c["close"]<bl else None))
+    add("43 BB plus RSI","PUT" if c["close"]>=bu and rv[-1]>70 else ("CALL" if c["close"]<=bl and rv[-1]<30 else None))
+    kc_u,kc_l=ema(cl,20)[-1]+1.5*a,ema(cl,20)[-1]-1.5*a
+    add("44 Keltner squeeze proxy","CALL" if bu<kc_u and c["close"]>kc_u else ("PUT" if bl>kc_l and c["close"]<kc_l else None))
+    psar=1 if c["close"]>p["high"] else (-1 if c["close"]<p["low"] else 0)
+    add("45 SAR direction proxy","CALL" if psar==1 else ("PUT" if psar==-1 else None))
+    add("46 SAR plus MACD","CALL" if psar==1 and ml[-1]>ms[-1] else ("PUT" if psar==-1 and ml[-1]<ms[-1] else None))
+    ten=(max(hi[-9:])+min(lo[-9:]))/2; kij=(max(hi[-26:])+min(lo[-26:]))/2; span=(max(hi[-52:])+min(lo[-52:]))/2
+    top=max((ten+kij)/2,span); bot=min((ten+kij)/2,span)
+    add("47 Ichimoku cloud proxy","CALL" if p["close"]<=top<c["close"] else ("PUT" if p["close"]>=bot>c["close"] else None))
+    add("48 Alligator EMA proxy","CALL" if e5[-1]>e9[-1]>e14[-1] and e5[-2]<=e9[-2] else ("PUT" if e5[-1]<e9[-1]<e14[-1] and e5[-2]>=e9[-2] else None))
+    add("49 fractal breakout","CALL" if sup and c["close"]>max(sup) else ("PUT" if res and c["close"]<min(res) else None))
+    fib_hi,fib_lo=max(hi[-30:]),min(lo[-30:]); fib=fib_hi-.618*(fib_hi-fib_lo)
+    add("50 Fibonacci pullback","CALL" if abs(c["close"]-fib)<.15*a and e9[-1]>e21[-1] and c["close"]>c["open"] else ("PUT" if abs(c["close"]-(fib_lo+.618*(fib_hi-fib_lo)))<.15*a and e9[-1]<e21[-1] and c["close"]<c["open"] else None))
+    # Prior support/resistance and candle context add weight, not extra independent strategies.
+    if near_s: add("Support confluence","CALL",2)
+    if near_r: add("Resistance confluence","PUT",2)
+    bull=sum(w for d,w in votes if d=="CALL"); bear=sum(w for d,w in votes if d=="PUT")
+    bc=sum(d=="CALL" for d,w in votes); rc=sum(d=="PUT" for d,w in votes)
+    vol_ok=a>0 and c["high"]-c["low"]<=2*a
+    direction="NO SIGNAL"
+    if vol_ok and bull>=MIN_SCORE and bull-bear>=MIN_VOTE_MARGIN and bc>=3: direction="CALL"
+    elif vol_ok and bear>=MIN_SCORE and bear-bull>=MIN_VOTE_MARGIN and rc>=3: direction="PUT"
+    return {"pair":PAIR,"timeframe":"1 Minute","direction":direction,
+        "bullish_score":bull,"bearish_score":bear,"bullish_setups":bc,"bearish_setups":rc,
+        "minimum_score":MIN_SCORE,"minimum_vote_margin":MIN_VOTE_MARGIN,
+        "reason":", ".join(reasons) if reasons else "No setup confirmed",
+        "rsi":round(rv[-1],2),"adx":round(adx(cs),2),"atr":round(a,6),
+        "macd":round(ml[-1],6),"macd_signal":round(ms[-1],6),
+        "ema9":round(e9[-1],6),"ema21":round(e21[-1],6),"ema50":round(e50[-1],6),"ema200":round(e200[-1],6),
+        "support":min(sup,key=lambda x:abs(x-c["close"])) if sup else None,
+        "resistance":min(res,key=lambda x:abs(x-c["close"])) if res else None,
+        "candlestick_patterns":sorted(pat),"candle_time":c["time"],"candles_analyzed":len(cs),
+        "strategy_note":"Several chart-pattern rules are explicitly rough proxies, not full visual pattern recognition. Backtest out-of-sample before live use."}
 
-    if len(candles) < MIN_CANDLES:
-        raise ValueError(
-            f"Need at least {MIN_CANDLES} valid candles"
-        )
-
-    closes = [x["close"] for x in candles]
-
-    e9 = ema(closes, 9)
-    e21 = ema(closes, 21)
-    e50 = ema(closes, 50)
-    e200 = ema(closes, 200)
-
-    current_rsi = rsi(closes)
-    macd_line, macd_signal = macd(closes)
-    current_atr = atr(candles)
-    current_adx = adx(candles)
-
-    current = candles[-1]
-
-    zones = analyze_zones(candles, current_atr)
-    candle_pattern = candlestick_analysis(candles)
-    chart_pattern = chart_pattern_analysis(candles, current_atr)
-
-    bullish_score = 0
-    bearish_score = 0
-    reasons = []
-
-    # Trend indicators
-    if e9[-1] > e21[-1] > e50[-1] > e200[-1]:
-        bullish_score += 2
-        reasons.append("Bullish EMA alignment")
-
-    if e9[-1] < e21[-1] < e50[-1] < e200[-1]:
-        bearish_score += 2
-        reasons.append("Bearish EMA alignment")
-
-    # RSI
-    if 52 < current_rsi < 68:
-        bullish_score += 1
-
-    if 32 < current_rsi < 48:
-        bearish_score += 1
-
-    # MACD
-    if macd_line > macd_signal:
-        bullish_score += 1
-
-    if macd_line < macd_signal:
-        bearish_score += 1
-
-    # ADX trend strength
-    if current_adx >= 20:
-        if e9[-1] > e21[-1]:
-            bullish_score += 1
-        elif e9[-1] < e21[-1]:
-            bearish_score += 1
-
-    # Support and resistance
-    if zones["near_support"]:
-        bullish_score += 2
-        reasons.append("Near support")
-
-    if zones["near_resistance"]:
-        bearish_score += 2
-        reasons.append("Near resistance")
-
-    # SNR flips
-    if zones["support_flip"]:
-        bullish_score += 2
-        reasons.append("Resistance turned support")
-
-    if zones["resistance_flip"]:
-        bearish_score += 2
-        reasons.append("Support turned resistance")
-
-    # Supply and demand
-    if zones["in_demand"]:
-        bullish_score += 2
-        reasons.append("Demand zone")
-
-    if zones["in_supply"]:
-        bearish_score += 2
-        reasons.append("Supply zone")
-
-    # Candlestick confirmation
-    if candle_pattern in (
-        "BULLISH_ENGULFING", "HAMMER"
-    ):
-        bullish_score += 2
-        reasons.append(candle_pattern)
-
-    if candle_pattern in (
-        "BEARISH_ENGULFING", "SHOOTING_STAR"
-    ):
-        bearish_score += 2
-        reasons.append(candle_pattern)
-
-    # Chart pattern confirmation
-    if chart_pattern in (
-        "POSSIBLE_DOUBLE_BOTTOM", "RESISTANCE_BREAKOUT"
-    ):
-        bullish_score += 2
-        reasons.append(chart_pattern)
-
-    if chart_pattern in (
-        "POSSIBLE_DOUBLE_TOP", "SUPPORT_BREAKDOWN"
-    ):
-        bearish_score += 2
-        reasons.append(chart_pattern)
-
-    # Avoid extreme candle volatility.
-    candle_range = current["high"] - current["low"]
-    volatility_ok = (
-        current_atr > 0
-        and candle_range <= current_atr * 2
-    )
-
-    direction = "NO SIGNAL"
-
-    if (
-        bullish_score >= MIN_SCORE
-        and bullish_score > bearish_score
-        and volatility_ok
-    ):
-        direction = "CALL"
-
-    elif (
-        bearish_score >= MIN_SCORE
-        and bearish_score > bullish_score
-        and volatility_ok
-    ):
-        direction = "PUT"
-
-    return {
-        "pair": PAIR,
-        "timeframe": "1 Minute",
-        "direction": direction,
-        "bullish_score": bullish_score,
-        "bearish_score": bearish_score,
-        "minimum_score": MIN_SCORE,
-        "reason": ", ".join(reasons) if reasons else "No strong confluence",
-        "candlestick_pattern": candle_pattern,
-        "chart_pattern": chart_pattern,
-        "support": zones["support"],
-        "resistance": zones["resistance"],
-        "demand_zone": zones["demand_zone"],
-        "supply_zone": zones["supply_zone"],
-        "near_support": zones["near_support"],
-        "near_resistance": zones["near_resistance"],
-        "in_demand": zones["in_demand"],
-        "in_supply": zones["in_supply"],
-        "support_flip": zones["support_flip"],
-        "resistance_flip": zones["resistance_flip"],
-        "rsi": round(current_rsi, 2),
-        "adx": round(current_adx, 2),
-        "atr": round(current_atr, 6),
-        "macd": round(macd_line, 6),
-        "macd_signal": round(macd_signal, 6),
-        "ema9": round(e9[-1], 6),
-        "ema21": round(e21[-1], 6),
-        "ema50": round(e50[-1], 6),
-        "ema200": round(e200[-1], 6),
-        "candle_time": current["time"],
-        "candles_analyzed": len(candles),
-    }
-
-
-if __name__ == "__main__":
-    candles = get_candles()
-    result = analyze_market(candles)
-
-    print("\n========== PROFESSIONAL BOT ==========")
-
-    for key, value in result.items():
-        print(f"{key.upper()}: {value}")
-
+if __name__=="__main__":
+    result=analyze_market(get_candles())
+    print("\\n========== PROFESSIONAL BOT ==========")
+    for k,v in result.items(): print(f"{k.upper()}: {v}")
     print("======================================")
-        
