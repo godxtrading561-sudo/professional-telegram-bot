@@ -11,39 +11,6 @@ TIMEFRAME = 60
 CANDLE_LIMIT = 1000
 
 
-def get_candles():
-    response = requests.get(
-        API_URL,
-        headers={
-            "Authorization": f"Bearer {API_KEY}",
-            "Accept": "application/json",
-        },
-        params={
-            "venue": "quotex",
-            "symbol": PAIR,
-            "tf": TIMEFRAME,
-            "limit": CANDLE_LIMIT,
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-
-    data = response.json()
-
-    if data.get("symbol") != PAIR:
-        raise RuntimeError("Wrong symbol returned by API")
-
-    candles = validate_candles(data.get("candles", []))
-
-    print("Requested:", CANDLE_LIMIT)
-    print("Valid candles:", len(candles))
-
-    if len(candles) < 220:
-        raise RuntimeError("At least 220 valid candles required")
-
-    return candles
-
-
 def candle_timestamp(candle):
     value = candle["time"]
 
@@ -67,7 +34,6 @@ def validate_candles(candles):
     for candle in candles:
         try:
             timestamp = candle_timestamp(candle)
-
             o = float(candle["open"])
             h = float(candle["high"])
             low = float(candle["low"])
@@ -76,7 +42,7 @@ def validate_candles(candles):
             if min(o, h, low, c) <= 0:
                 continue
 
-            if h < max(o, c, low) or low > min(o, c, h):
+            if h < max(o, low, c) or low > min(o, h, c):
                 continue
 
             unique[timestamp] = {
@@ -90,10 +56,40 @@ def validate_candles(candles):
         except (KeyError, TypeError, ValueError):
             continue
 
-    return [
-        unique[t]
-        for t in sorted(unique)
-    ]
+    return [unique[t] for t in sorted(unique)]
+
+
+def get_candles():
+    response = requests.get(
+        API_URL,
+        headers={
+            "Authorization": f"Bearer {API_KEY}",
+            "Accept": "application/json",
+        },
+        params={
+            "venue": "quotex",
+            "symbol": PAIR,
+            "tf": TIMEFRAME,
+            "limit": CANDLE_LIMIT,
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+
+    data = response.json()
+
+    if data.get("symbol") != PAIR:
+        raise RuntimeError("Returned symbol mismatch")
+
+    candles = validate_candles(data.get("candles", []))
+
+    print("Requested candles:", CANDLE_LIMIT)
+    print("Valid unique candles:", len(candles))
+
+    if len(candles) < 220:
+        raise RuntimeError("At least 220 valid candles required")
+
+    return candles
 
 
 def ema(values, period):
@@ -103,15 +99,18 @@ def ema(values, period):
     multiplier = 2 / (period + 1)
     result = [sum(values[:period]) / period]
 
-    for price in values[period:]:
+    for value in values[period:]:
         result.append(
-            price * multiplier + result[-1] * (1 - multiplier)
+            value * multiplier + result[-1] * (1 - multiplier)
         )
 
     return result
 
 
 def rsi(values, period=14):
+    if len(values) <= period:
+        raise ValueError("Insufficient RSI data")
+
     changes = [
         values[i] - values[i - 1]
         for i in range(1, len(values))
@@ -130,6 +129,9 @@ def rsi(values, period=14):
     if avg_loss == 0:
         return 100.0 if avg_gain > 0 else 50.0
 
+    if avg_gain == 0:
+        return 0.0
+
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
@@ -137,8 +139,8 @@ def rsi(values, period=14):
 def macd(values):
     fast = ema(values, 12)
     slow = ema(values, 26)
-
     aligned_fast = fast[-len(slow):]
+
     line = [
         a - b for a, b in zip(aligned_fast, slow)
     ]
@@ -207,14 +209,10 @@ def adx(candles, period=14):
         plus = plus - plus / period + plus_dm[i]
         minus = minus - minus / period + minus_dm[i]
 
-        if tr == 0:
-            dx_values.append(0)
-            continue
-
-        pdi = 100 * plus / tr
-        mdi = 100 * minus / tr
-
+        pdi = 100 * plus / tr if tr else 0
+        mdi = 100 * minus / tr if tr else 0
         denominator = pdi + mdi
+
         dx_values.append(
             100 * abs(pdi - mdi) / denominator
             if denominator else 0
@@ -250,12 +248,16 @@ def analyze_market(candles):
     current_adx = adx(candles)
 
     current = candles[-1]
-    previous = candles[-2]
 
     direction = "NO SIGNAL"
-    reason = "Insufficient confirmation"
+    reason = "Conditions not matched"
 
-    # Trend and momentum confirmation.
+    candle_range = current["high"] - current["low"]
+    volatility_ok = (
+        current_atr > 0
+        and candle_range <= current_atr * 2
+    )
+
     bullish = (
         e9[-1] > e21[-1] > e50[-1] > e200[-1]
         and current["close"] > e200[-1]
@@ -274,20 +276,13 @@ def analyze_market(candles):
         and current["close"] < current["open"]
     )
 
-    # Avoid unusually large candles.
-    candle_range = current["high"] - current["low"]
-    volatility_ok = (
-        current_atr > 0
-        and candle_range <= current_atr * 2
-    )
-
     if bullish and volatility_ok:
         direction = "CALL"
-        reason = "Bullish trend, MACD, RSI and ADX confirmed"
+        reason = "Trend, momentum and volatility confirmed"
 
     elif bearish and volatility_ok:
         direction = "PUT"
-        reason = "Bearish trend, MACD, RSI and ADX confirmed"
+        reason = "Trend, momentum and volatility confirmed"
 
     return {
         "pair": PAIR,
