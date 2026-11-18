@@ -1,7 +1,7 @@
 
 import os
+import math
 import requests
-from datetime import datetime, timezone
 
 API_KEY = os.environ["OTCHARTS_API_KEY"]
 API_URL = "https://otcharts.com/v1/candles"
@@ -10,53 +10,50 @@ PAIR = "EURUSD_otc"
 TIMEFRAME = 60
 CANDLE_LIMIT = 1000
 
+MIN_CANDLES = 220
+MIN_SCORE = 7
 
-def candle_timestamp(candle):
-    value = candle["time"]
 
-    if isinstance(value, (int, float)):
-        value = float(value)
-        return value / 1000 if value > 1e12 else value
-
-    parsed = datetime.fromisoformat(
-        str(value).replace("Z", "+00:00")
-    )
-
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-
-    return parsed.timestamp()
-
+# ---------------- DATA ----------------
 
 def validate_candles(candles):
-    unique = {}
+    cleaned = []
+    seen = set()
 
     for candle in candles:
         try:
-            timestamp = candle_timestamp(candle)
-            o = float(candle["open"])
-            h = float(candle["high"])
-            low = float(candle["low"])
-            c = float(candle["close"])
-
-            if min(o, h, low, c) <= 0:
-                continue
-
-            if h < max(o, low, c) or low > min(o, h, c):
-                continue
-
-            unique[timestamp] = {
+            item = {
                 "time": candle["time"],
-                "open": o,
-                "high": h,
-                "low": low,
-                "close": c,
+                "open": float(candle["open"]),
+                "high": float(candle["high"]),
+                "low": float(candle["low"]),
+                "close": float(candle["close"]),
             }
+
+            values = [
+                item["open"], item["high"],
+                item["low"], item["close"]
+            ]
+
+            if not all(math.isfinite(v) for v in values):
+                continue
+
+            if item["high"] < max(values):
+                continue
+
+            if item["low"] > min(values):
+                continue
+
+            if item["time"] in seen:
+                continue
+
+            seen.add(item["time"])
+            cleaned.append(item)
 
         except (KeyError, TypeError, ValueError):
             continue
 
-    return [unique[t] for t in sorted(unique)]
+    return sorted(cleaned, key=lambda x: x["time"])
 
 
 def get_candles():
@@ -74,43 +71,43 @@ def get_candles():
         },
         timeout=30,
     )
-    response.raise_for_status()
 
+    response.raise_for_status()
     data = response.json()
 
     if data.get("symbol") != PAIR:
-        raise RuntimeError("Returned symbol mismatch")
+        raise RuntimeError("Market symbol mismatch")
 
     candles = validate_candles(data.get("candles", []))
 
-    print("Requested candles:", CANDLE_LIMIT)
-    print("Valid unique candles:", len(candles))
+    print("Requested:", CANDLE_LIMIT)
+    print("Received valid candles:", len(candles))
 
-    if len(candles) < 220:
-        raise RuntimeError("At least 220 valid candles required")
+    if len(candles) < MIN_CANDLES:
+        raise RuntimeError("Not enough valid candles")
 
     return candles
 
 
+# ---------------- INDICATORS ----------------
+
 def ema(values, period):
     if len(values) < period:
-        raise ValueError("Insufficient EMA data")
+        raise ValueError("Not enough EMA data")
 
     multiplier = 2 / (period + 1)
     result = [sum(values[:period]) / period]
 
     for value in values[period:]:
         result.append(
-            value * multiplier + result[-1] * (1 - multiplier)
+            value * multiplier
+            + result[-1] * (1 - multiplier)
         )
 
     return result
 
 
 def rsi(values, period=14):
-    if len(values) <= period:
-        raise ValueError("Insufficient RSI data")
-
     changes = [
         values[i] - values[i - 1]
         for i in range(1, len(values))
@@ -119,35 +116,33 @@ def rsi(values, period=14):
     gains = [max(x, 0) for x in changes]
     losses = [max(-x, 0) for x in changes]
 
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
+    gain = sum(gains[:period]) / period
+    loss = sum(losses[:period]) / period
 
     for i in range(period, len(gains)):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        gain = (gain * (period - 1) + gains[i]) / period
+        loss = (loss * (period - 1) + losses[i]) / period
 
-    if avg_loss == 0:
-        return 100.0 if avg_gain > 0 else 50.0
+    if loss == 0:
+        return 100.0 if gain else 50.0
 
-    if avg_gain == 0:
-        return 0.0
-
-    rs = avg_gain / avg_loss
+    rs = gain / loss
     return 100 - (100 / (1 + rs))
 
 
-def macd(values):
-    fast = ema(values, 12)
-    slow = ema(values, 26)
-    aligned_fast = fast[-len(slow):]
+def macd(values, fast=12, slow=26, signal=9):
+    fast_line = ema(values, fast)
+    slow_line = ema(values, slow)
+
+    fast_line = fast_line[-len(slow_line):]
 
     line = [
-        a - b for a, b in zip(aligned_fast, slow)
+        a - b for a, b in zip(fast_line, slow_line)
     ]
 
-    signal = ema(line, 9)
+    signal_line = ema(line, signal)
 
-    return line[-1], signal[-1]
+    return line[-1], signal_line[-1]
 
 
 def atr(candles, period=14):
@@ -164,12 +159,12 @@ def atr(candles, period=14):
         ))
 
     if len(ranges) < period:
-        raise ValueError("Insufficient ATR data")
+        raise ValueError("Not enough ATR data")
 
     value = sum(ranges[:period]) / period
 
-    for current in ranges[period:]:
-        value = (value * (period - 1) + current) / period
+    for item in ranges[period:]:
+        value = (value * (period - 1) + item) / period
 
     return value
 
@@ -196,7 +191,7 @@ def adx(candles, period=14):
         ))
 
     if len(tr_values) < period * 2:
-        raise ValueError("Insufficient ADX data")
+        raise ValueError("Not enough ADX data")
 
     tr = sum(tr_values[:period])
     plus = sum(plus_dm[:period])
@@ -205,37 +200,253 @@ def adx(candles, period=14):
     dx_values = []
 
     for i in range(period, len(tr_values)):
-        tr = tr - tr / period + tr_values[i]
-        plus = plus - plus / period + plus_dm[i]
-        minus = minus - minus / period + minus_dm[i]
+        tr += (tr_values[i] - tr) / period
+        plus += (plus_dm[i] - plus) / period
+        minus += (minus_dm[i] - minus) / period
 
         pdi = 100 * plus / tr if tr else 0
         mdi = 100 * minus / tr if tr else 0
-        denominator = pdi + mdi
+        total = pdi + mdi
 
         dx_values.append(
-            100 * abs(pdi - mdi) / denominator
-            if denominator else 0
+            100 * abs(pdi - mdi) / total if total else 0
         )
 
     if len(dx_values) < period:
-        raise ValueError("Insufficient ADX values")
+        raise ValueError("Not enough ADX values")
 
     value = sum(dx_values[:period]) / period
 
-    for current in dx_values[period:]:
-        value = (value * (period - 1) + current) / period
+    for item in dx_values[period:]:
+        value = (value * (period - 1) + item) / period
 
     return value
 
 
+# ---------------- SUPPORT / RESISTANCE ----------------
+
+def find_levels(candles, lookback=100, strength=2):
+    sample = candles[-lookback:]
+    supports = []
+    resistances = []
+
+    for i in range(strength, len(sample) - strength):
+        current = sample[i]
+
+        left = sample[i - strength:i]
+        right = sample[i + 1:i + strength + 1]
+
+        if all(current["low"] < x["low"] for x in left + right):
+            supports.append(current["low"])
+
+        if all(current["high"] > x["high"] for x in left + right):
+            resistances.append(current["high"])
+
+    return supports, resistances
+
+
+def nearest_level(price, levels):
+    if not levels:
+        return None
+
+    return min(levels, key=lambda level: abs(price - level))
+
+
+# ---------------- SNR / SUPPLY / DEMAND ----------------
+
+def analyze_zones(candles, current_atr):
+    supports, resistances = find_levels(candles)
+
+    price = candles[-1]["close"]
+    tolerance = max(current_atr * 0.35, price * 0.00005)
+
+    support = nearest_level(price, supports)
+    resistance = nearest_level(price, resistances)
+
+    near_support = (
+        support is not None
+        and abs(price - support) <= tolerance
+    )
+
+    near_resistance = (
+        resistance is not None
+        and abs(price - resistance) <= tolerance
+    )
+
+    # Simplified swing-based supply and demand zones.
+    demand_zone = None
+    supply_zone = None
+
+    recent = candles[-60:]
+
+    for i in range(2, len(recent) - 2):
+        candle = recent[i]
+        following = recent[i + 1:i + 3]
+
+        upward_move = (
+            min(x["close"] for x in following) - candle["high"]
+        )
+
+        downward_move = (
+            candle["low"] - max(x["close"] for x in following)
+        )
+
+        if upward_move > current_atr:
+            demand_zone = (candle["low"], candle["high"])
+
+        if downward_move > current_atr:
+            supply_zone = (candle["low"], candle["high"])
+
+    in_demand = (
+        demand_zone is not None
+        and demand_zone[0] - tolerance <= price <= demand_zone[1] + tolerance
+    )
+
+    in_supply = (
+        supply_zone is not None
+        and supply_zone[0] - tolerance <= price <= supply_zone[1] + tolerance
+    )
+
+    # SNR flip: price crossing a previous swing level.
+    previous = candles[-2]
+
+    support_flip = any(
+        previous["close"] < level <= price
+        for level in resistances
+    )
+
+    resistance_flip = any(
+        previous["close"] > level >= price
+        for level in supports
+    )
+
+    return {
+        "support": support,
+        "resistance": resistance,
+        "near_support": near_support,
+        "near_resistance": near_resistance,
+        "demand_zone": demand_zone,
+        "supply_zone": supply_zone,
+        "in_demand": in_demand,
+        "in_supply": in_supply,
+        "support_flip": support_flip,
+        "resistance_flip": resistance_flip,
+    }
+
+
+# ---------------- CANDLESTICK PATTERNS ----------------
+
+def candlestick_analysis(candles):
+    current = candles[-1]
+    previous = candles[-2]
+
+    body = abs(current["close"] - current["open"])
+    candle_range = current["high"] - current["low"]
+
+    if candle_range <= 0:
+        return "NONE"
+
+    upper_wick = current["high"] - max(
+        current["open"], current["close"]
+    )
+    lower_wick = min(
+        current["open"], current["close"]
+    ) - current["low"]
+
+    bullish_engulfing = (
+        previous["close"] < previous["open"]
+        and current["close"] > current["open"]
+        and current["open"] <= previous["close"]
+        and current["close"] >= previous["open"]
+    )
+
+    bearish_engulfing = (
+        previous["close"] > previous["open"]
+        and current["close"] < current["open"]
+        and current["open"] >= previous["close"]
+        and current["close"] <= previous["open"]
+    )
+
+    hammer = (
+        lower_wick >= body * 2
+        and upper_wick <= body
+        and current["close"] > current["open"]
+    )
+
+    shooting_star = (
+        upper_wick >= body * 2
+        and lower_wick <= body
+        and current["close"] < current["open"]
+    )
+
+    if bullish_engulfing:
+        return "BULLISH_ENGULFING"
+
+    if bearish_engulfing:
+        return "BEARISH_ENGULFING"
+
+    if hammer:
+        return "HAMMER"
+
+    if shooting_star:
+        return "SHOOTING_STAR"
+
+    return "NONE"
+
+
+# ---------------- CHART PATTERNS ----------------
+
+def chart_pattern_analysis(candles, current_atr):
+    supports, resistances = find_levels(candles, lookback=80)
+
+    if len(candles) < 20:
+        return "NONE"
+
+    price = candles[-1]["close"]
+    tolerance = current_atr * 0.35
+
+    # Approximate double top / double bottom.
+    recent_highs = sorted(
+        [x["high"] for x in candles[-30:]],
+        reverse=True
+    )[:2]
+
+    recent_lows = sorted(
+        [x["low"] for x in candles[-30:]]
+    )[:2]
+
+    if (
+        abs(recent_highs[0] - recent_highs[1]) <= tolerance
+        and price < recent_highs[0]
+    ):
+        return "POSSIBLE_DOUBLE_TOP"
+
+    if (
+        abs(recent_lows[0] - recent_lows[1]) <= tolerance
+        and price > recent_lows[0]
+    ):
+        return "POSSIBLE_DOUBLE_BOTTOM"
+
+    if resistances and price > max(resistances):
+        return "RESISTANCE_BREAKOUT"
+
+    if supports and price < min(supports):
+        return "SUPPORT_BREAKDOWN"
+
+    return "NONE"
+
+
+# ---------------- CONFLUENCE ENGINE ----------------
+
 def analyze_market(candles):
     candles = validate_candles(candles)
 
-    if len(candles) < 220:
-        raise ValueError("At least 220 candles required")
+    if len(candles) < MIN_CANDLES:
+        raise ValueError(
+            f"Need at least {MIN_CANDLES} valid candles"
+        )
 
-    closes = [c["close"] for c in candles]
+    closes = [x["close"] for x in candles]
 
     e9 = ema(closes, 9)
     e21 = ema(closes, 21)
@@ -249,46 +460,140 @@ def analyze_market(candles):
 
     current = candles[-1]
 
-    direction = "NO SIGNAL"
-    reason = "Conditions not matched"
+    zones = analyze_zones(candles, current_atr)
+    candle_pattern = candlestick_analysis(candles)
+    chart_pattern = chart_pattern_analysis(candles, current_atr)
 
+    bullish_score = 0
+    bearish_score = 0
+    reasons = []
+
+    # Trend indicators
+    if e9[-1] > e21[-1] > e50[-1] > e200[-1]:
+        bullish_score += 2
+        reasons.append("Bullish EMA alignment")
+
+    if e9[-1] < e21[-1] < e50[-1] < e200[-1]:
+        bearish_score += 2
+        reasons.append("Bearish EMA alignment")
+
+    # RSI
+    if 52 < current_rsi < 68:
+        bullish_score += 1
+
+    if 32 < current_rsi < 48:
+        bearish_score += 1
+
+    # MACD
+    if macd_line > macd_signal:
+        bullish_score += 1
+
+    if macd_line < macd_signal:
+        bearish_score += 1
+
+    # ADX trend strength
+    if current_adx >= 20:
+        if e9[-1] > e21[-1]:
+            bullish_score += 1
+        elif e9[-1] < e21[-1]:
+            bearish_score += 1
+
+    # Support and resistance
+    if zones["near_support"]:
+        bullish_score += 2
+        reasons.append("Near support")
+
+    if zones["near_resistance"]:
+        bearish_score += 2
+        reasons.append("Near resistance")
+
+    # SNR flips
+    if zones["support_flip"]:
+        bullish_score += 2
+        reasons.append("Resistance turned support")
+
+    if zones["resistance_flip"]:
+        bearish_score += 2
+        reasons.append("Support turned resistance")
+
+    # Supply and demand
+    if zones["in_demand"]:
+        bullish_score += 2
+        reasons.append("Demand zone")
+
+    if zones["in_supply"]:
+        bearish_score += 2
+        reasons.append("Supply zone")
+
+    # Candlestick confirmation
+    if candle_pattern in (
+        "BULLISH_ENGULFING", "HAMMER"
+    ):
+        bullish_score += 2
+        reasons.append(candle_pattern)
+
+    if candle_pattern in (
+        "BEARISH_ENGULFING", "SHOOTING_STAR"
+    ):
+        bearish_score += 2
+        reasons.append(candle_pattern)
+
+    # Chart pattern confirmation
+    if chart_pattern in (
+        "POSSIBLE_DOUBLE_BOTTOM", "RESISTANCE_BREAKOUT"
+    ):
+        bullish_score += 2
+        reasons.append(chart_pattern)
+
+    if chart_pattern in (
+        "POSSIBLE_DOUBLE_TOP", "SUPPORT_BREAKDOWN"
+    ):
+        bearish_score += 2
+        reasons.append(chart_pattern)
+
+    # Avoid extreme candle volatility.
     candle_range = current["high"] - current["low"]
     volatility_ok = (
         current_atr > 0
         and candle_range <= current_atr * 2
     )
 
-    bullish = (
-        e9[-1] > e21[-1] > e50[-1] > e200[-1]
-        and current["close"] > e200[-1]
-        and macd_line > macd_signal
-        and 52 < current_rsi < 68
-        and current_adx >= 20
-        and current["close"] > current["open"]
-    )
+    direction = "NO SIGNAL"
 
-    bearish = (
-        e9[-1] < e21[-1] < e50[-1] < e200[-1]
-        and current["close"] < e200[-1]
-        and macd_line < macd_signal
-        and 32 < current_rsi < 48
-        and current_adx >= 20
-        and current["close"] < current["open"]
-    )
-
-    if bullish and volatility_ok:
+    if (
+        bullish_score >= MIN_SCORE
+        and bullish_score > bearish_score
+        and volatility_ok
+    ):
         direction = "CALL"
-        reason = "Trend, momentum and volatility confirmed"
 
-    elif bearish and volatility_ok:
+    elif (
+        bearish_score >= MIN_SCORE
+        and bearish_score > bullish_score
+        and volatility_ok
+    ):
         direction = "PUT"
-        reason = "Trend, momentum and volatility confirmed"
 
     return {
         "pair": PAIR,
         "timeframe": "1 Minute",
         "direction": direction,
-        "reason": reason,
+        "bullish_score": bullish_score,
+        "bearish_score": bearish_score,
+        "minimum_score": MIN_SCORE,
+        "reason": ", ".join(reasons) if reasons else "No strong confluence",
+        "candlestick_pattern": candle_pattern,
+        "chart_pattern": chart_pattern,
+        "support": zones["support"],
+        "resistance": zones["resistance"],
+        "demand_zone": zones["demand_zone"],
+        "supply_zone": zones["supply_zone"],
+        "near_support": zones["near_support"],
+        "near_resistance": zones["near_resistance"],
+        "in_demand": zones["in_demand"],
+        "in_supply": zones["in_supply"],
+        "support_flip": zones["support_flip"],
+        "resistance_flip": zones["resistance_flip"],
         "rsi": round(current_rsi, 2),
         "adx": round(current_adx, 2),
         "atr": round(current_atr, 6),
@@ -313,4 +618,4 @@ if __name__ == "__main__":
         print(f"{key.upper()}: {value}")
 
     print("======================================")
-    
+        
