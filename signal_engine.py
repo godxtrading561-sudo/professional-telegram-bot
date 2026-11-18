@@ -1,116 +1,207 @@
+
 """
-Conservative, research-only signal engine.
-Implements a small set of transparent indicator rules rather than pretending
-to implement all 50 chart setups exactly.
-
-Expected candle format: list[dict] with open, high, low, close and optional time.
-OTCharts endpoint/parameters remain configurable through environment variables.
+Professional Signal Engine
+Research only: EUR/USD Yahoo data.
+Not Quotex OTC data. No guaranteed accuracy.
 """
-import os
-import requests
-from statistics import mean
 
-API_URL = os.getenv("OTCHARTS_URL", "https://otcharts.com/v1/candles")
-API_KEY = os.getenv("OTCHARTS_API_KEY", "")
-SYMBOL = os.getenv("OTCHARTS_SYMBOL", "EURUSD_otc")
-TIMEFRAME = os.getenv("OTCHARTS_TIMEFRAME", "60")
-CANDLE_LIMIT = int(os.getenv("OTCHARTS_LIMIT", "1000"))
+from math import isfinite
 
-def fetch_candles():
-    if not API_KEY:
-        raise RuntimeError("OTCHARTS_API_KEY GitHub Secret is missing.")
-    headers = {"Authorization": f"Bearer {API_KEY}", "X-API-KEY": API_KEY}
-    params = {"venue": "quotex", "symbol": SYMBOL, "tf": TIMEFRAME, "limit": CANDLE_LIMIT}
-    response = requests.get(API_URL, headers=headers, params=params, timeout=25)
-    response.raise_for_status()
-    payload = response.json()
-    rows = payload if isinstance(payload, list) else (
-        payload.get("candles") or payload.get("data") or payload.get("result") or []
-    )
-    candles = validate_candles(rows)
-    print(f"OTCharts returned {len(candles)} valid candles (requested {CANDLE_LIMIT}).")
-    return candles
 
-def validate_candles(rows):
-    result = []
-    for row in rows:
+MIN_CANDLES = 220
+
+
+def validate_candles(candles):
+    """Validate and clean OHLC candles."""
+    clean = []
+
+    for candle in candles:
         try:
-            c = {k: float(row[k]) for k in ("open", "high", "low", "close")}
-            if c["high"] < max(c["open"], c["close"], c["low"]): continue
-            if c["low"] > min(c["open"], c["close"], c["high"]): continue
-            if c["high"] < c["low"]: continue
-            c["time"] = row.get("time", row.get("timestamp", len(result)))
-            result.append(c)
+            item = {
+                "time": str(candle.get("time", "")),
+                "open": float(candle["open"]),
+                "high": float(candle["high"]),
+                "low": float(candle["low"]),
+                "close": float(candle["close"]),
+            }
+
+            values = [
+                item["open"], item["high"],
+                item["low"], item["close"]
+            ]
+
+            if not all(isfinite(v) and v > 0 for v in values):
+                continue
+
+            if item["high"] < max(item["open"], item["close"]):
+                continue
+
+            if item["low"] > min(item["open"], item["close"]):
+                continue
+
+            if item["high"] < item["low"]:
+                continue
+
+            clean.append(item)
+
         except (KeyError, TypeError, ValueError):
             continue
-    try:
-        result.sort(key=lambda x: float(x["time"]))
-    except (TypeError, ValueError):
-        pass
-    return result
+
+    return clean
+
 
 def ema(values, period):
-    if len(values) < period: return None
-    alpha = 2 / (period + 1)
-    current = mean(values[:period])
+    """Calculate Exponential Moving Average."""
+    if len(values) < period:
+        return []
+
+    multiplier = 2 / (period + 1)
+    result = [sum(values[:period]) / period]
+
     for value in values[period:]:
-        current = alpha * value + (1-alpha) * current
-    return current
+        result.append(
+            (value - result[-1]) * multiplier + result[-1]
+        )
 
-def rsi(values, period=14):
-    if len(values) < period + 1: return None
-    changes = [values[i] - values[i-1] for i in range(1, len(values))]
-    gains = [max(x, 0) for x in changes[-period:]]
-    losses = [max(-x, 0) for x in changes[-period:]]
-    avg_gain, avg_loss = mean(gains), mean(losses)
-    if avg_loss == 0: return 100.0
-    return 100 - (100 / (1 + avg_gain / avg_loss))
+    return [None] * (period - 1) + result
 
-def atr(candles, period=14):
-    if len(candles) < period + 1: return None
-    trs = []
-    for i in range(1, len(candles)):
-        p, c = candles[i-1]["close"], candles[i]
-        trs.append(max(c["high"]-c["low"], abs(c["high"]-p), abs(c["low"]-p)))
-    return mean(trs[-period:])
+
+def calculate_rsi(closes, period=14):
+    """Calculate RSI."""
+    if len(closes) <= period:
+        return None
+
+    gains = []
+    losses = []
+
+    for i in range(1, len(closes)):
+        change = closes[i] - closes[i - 1]
+        gains.append(max(change, 0))
+        losses.append(max(-change, 0))
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    for i in range(period, len(gains)):
+        avg_gain = (
+            (avg_gain * (period - 1)) + gains[i]
+        ) / period
+        avg_loss = (
+            (avg_loss * (period - 1)) + losses[i]
+        ) / period
+
+    if avg_loss == 0:
+        return 100.0
+
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
 
 def analyze_market(candles):
-    """Return a CALL/PUT candidate or None. Uses only supplied completed candles."""
+    """
+    Return CALL, PUT or NO SIGNAL.
+    Uses only candles supplied to this function.
+    """
+
     candles = validate_candles(candles)
-    if len(candles) < 220:
-        return {"direction": None, "reason": "Need at least 220 valid candles."}
+
+    if len(candles) < MIN_CANDLES:
+        return {
+            "direction": None,
+            "reason": "Not enough candle history"
+        }
 
     closes = [c["close"] for c in candles]
-    last = candles[-1]
-    e9, e21, e50, e200 = (ema(closes, p) for p in (9, 21, 50, 200))
-    rv, av = rsi(closes), atr(candles)
-    if None in (e9, e21, e50, e200, rv, av) or av <= 0:
-        return {"direction": None, "reason": "Indicator data unavailable."}
+    opens = [c["open"] for c in candles]
 
-    # Conservative trend filter + momentum confirmation.
-    bull_trend = last["close"] > e200 and e50 > e200 and e9 > e21
-    bear_trend = last["close"] < e200 and e50 < e200 and e9 < e21
+    ema9 = ema(closes, 9)
+    ema21 = ema(closes, 21)
+    ema50 = ema(closes, 50)
+    ema200 = ema(closes, 200)
 
-    # Require a meaningful candle body; avoid tiny/doji candles.
-    body = abs(last["close"] - last["open"])
-    body_ok = body >= 0.15 * av
+    rsi = calculate_rsi(closes, 14)
 
-    # RSI momentum zone avoids buying extreme overbought / selling oversold.
-    call_ok = bull_trend and 50 <= rv <= 68 and last["close"] > last["open"] and body_ok
-    put_ok = bear_trend and 32 <= rv <= 50 and last["close"] < last["open"] and body_ok
+    if rsi is None:
+        return {
+            "direction": None,
+            "reason": "RSI unavailable"
+        }
 
-    details = {
-        "rsi": round(rv, 2), "ema9": round(e9, 6), "ema21": round(e21, 6),
-        "ema50": round(e50, 6), "ema200": round(e200, 6), "atr": round(av, 6),
-        "candle_body": round(body, 6)
-    }
-    if call_ok:
-        return {"direction": "CALL", "score": 4, "reason": "EMA trend + RSI momentum + bullish candle", "indicators": details}
-    if put_ok:
-        return {"direction": "PUT", "score": 4, "reason": "EMA trend + RSI momentum + bearish candle", "indicators": details}
-    return {"direction": None, "reason": "No high-confidence rule combination.", "indicators": details}
+    last_close = closes[-1]
+    last_open = opens[-1]
 
-if __name__ == "__main__":
-    data = fetch_candles()
-    print(analyze_market(data))
-    
+    e9 = ema9[-1]
+    e21 = ema21[-1]
+    e50 = ema50[-1]
+    e200 = ema200[-1]
+
+    previous_close = closes[-2]
+
+    bullish_trend = (
+        last_close > e200 and
+        e50 > e200 and
+        e9 > e21
+    )
+
+    bearish_trend = (
+        last_close < e200 and
+        e50 < e200 and
+        e9 < e21
+    )
+
+    bullish_candle = last_close > last_open
+    bearish_candle = last_close < last_open
+
+    bullish_momentum = last_close > previous_close
+    bearish_momentum = last_close < previous_close
+
+    # Conservative CALL conditions
+    if (
+        bullish_trend
+        and bullish_candle
+        and bullish_momentum
+        and 50 <= rsi <= 68
+    ):
+        return {
+            "direction": "CALL",
+            "reason": (
+                "Bullish EMA trend, RSI confirmation "
+                "and positive candle momentum"
+            ),
+            "rsi": round(rsi, 2),
+            "ema9": round(e9, 6),
+            "ema21": round(e21, 6),
+            "ema50": round(e50, 6),
+            "ema200": round(e200, 6)
+        }
+
+    # Conservative PUT conditions
+    if (
+        bearish_trend
+        and bearish_candle
+        and bearish_momentum
+        and 32 <= rsi <= 50
+    ):
+        return {
+            "direction": "PUT",
+            "reason": (
+                "Bearish EMA trend, RSI confirmation "
+                "and negative candle momentum"
+            ),
+            "rsi": round(rsi, 2),
+            "ema9": round(e9, 6),
+            "ema21": round(e21, 6),
+            "ema50": round(e50, 6),
+            "ema200": round(e200, 6)
+        }
+
+    return {
+        "direction": None,
+        "reason": "No clear setup",
+        "rsi": round(rsi, 2),
+        "ema9": round(e9, 6),
+        "ema21": round(e21, 6),
+        "ema50": round(e50, 6),
+        "ema200": round(e200, 6)
+            }
+        
