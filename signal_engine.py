@@ -1,18 +1,41 @@
 
 """
-Professional Signal Engine
+Professional Signal Engine with Diagnostics
 Research only: EUR/USD Yahoo data.
 Not Quotex OTC data. No guaranteed accuracy.
 """
 
 from math import isfinite
 
-
 MIN_CANDLES = 220
+
+DIAGNOSTICS = {
+    "total_checks": 0,
+    "insufficient_history": 0,
+    "call_trend_pass": 0,
+    "put_trend_pass": 0,
+    "call_candle_pass": 0,
+    "put_candle_pass": 0,
+    "call_momentum_pass": 0,
+    "put_momentum_pass": 0,
+    "call_rsi_pass": 0,
+    "put_rsi_pass": 0,
+    "call_signals": 0,
+    "put_signals": 0,
+    "no_signal": 0,
+}
+
+
+def reset_diagnostics():
+    for key in DIAGNOSTICS:
+        DIAGNOSTICS[key] = 0
+
+
+def get_diagnostics():
+    return DIAGNOSTICS.copy()
 
 
 def validate_candles(candles):
-    """Validate and clean OHLC candles."""
     clean = []
 
     for candle in candles:
@@ -51,7 +74,6 @@ def validate_candles(candles):
 
 
 def ema(values, period):
-    """Calculate Exponential Moving Average."""
     if len(values) < period:
         return []
 
@@ -67,7 +89,6 @@ def ema(values, period):
 
 
 def calculate_rsi(closes, period=14):
-    """Calculate RSI."""
     if len(closes) <= period:
         return None
 
@@ -84,28 +105,27 @@ def calculate_rsi(closes, period=14):
 
     for i in range(period, len(gains)):
         avg_gain = (
-            (avg_gain * (period - 1)) + gains[i]
+            avg_gain * (period - 1) + gains[i]
         ) / period
+
         avg_loss = (
-            (avg_loss * (period - 1)) + losses[i]
+            avg_loss * (period - 1) + losses[i]
         ) / period
 
     if avg_loss == 0:
-        return 100.0
+        return 100.0 if avg_gain > 0 else 50.0
 
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
 
 def analyze_market(candles):
-    """
-    Return CALL, PUT or NO SIGNAL.
-    Uses only candles supplied to this function.
-    """
+    DIAGNOSTICS["total_checks"] += 1
 
     candles = validate_candles(candles)
 
     if len(candles) < MIN_CANDLES:
+        DIAGNOSTICS["insufficient_history"] += 1
         return {
             "direction": None,
             "reason": "Not enough candle history"
@@ -129,13 +149,12 @@ def analyze_market(candles):
 
     last_close = closes[-1]
     last_open = opens[-1]
+    previous_close = closes[-2]
 
     e9 = ema9[-1]
     e21 = ema21[-1]
     e50 = ema50[-1]
     e200 = ema200[-1]
-
-    previous_close = closes[-2]
 
     bullish_trend = (
         last_close > e200 and
@@ -155,19 +174,46 @@ def analyze_market(candles):
     bullish_momentum = last_close > previous_close
     bearish_momentum = last_close < previous_close
 
-    # Conservative CALL conditions
+    call_rsi = 50 <= rsi <= 68
+    put_rsi = 32 <= rsi <= 50
+
+    # Count individual conditions
+    if bullish_trend:
+        DIAGNOSTICS["call_trend_pass"] += 1
+
+    if bearish_trend:
+        DIAGNOSTICS["put_trend_pass"] += 1
+
+    if bullish_candle:
+        DIAGNOSTICS["call_candle_pass"] += 1
+
+    if bearish_candle:
+        DIAGNOSTICS["put_candle_pass"] += 1
+
+    if bullish_momentum:
+        DIAGNOSTICS["call_momentum_pass"] += 1
+
+    if bearish_momentum:
+        DIAGNOSTICS["put_momentum_pass"] += 1
+
+    if call_rsi:
+        DIAGNOSTICS["call_rsi_pass"] += 1
+
+    if put_rsi:
+        DIAGNOSTICS["put_rsi_pass"] += 1
+
+    # CALL
     if (
         bullish_trend
         and bullish_candle
         and bullish_momentum
-        and 50 <= rsi <= 68
+        and call_rsi
     ):
+        DIAGNOSTICS["call_signals"] += 1
+
         return {
             "direction": "CALL",
-            "reason": (
-                "Bullish EMA trend, RSI confirmation "
-                "and positive candle momentum"
-            ),
+            "reason": "Bullish trend, candle, momentum and RSI confirmed",
             "rsi": round(rsi, 2),
             "ema9": round(e9, 6),
             "ema21": round(e21, 6),
@@ -175,25 +221,26 @@ def analyze_market(candles):
             "ema200": round(e200, 6)
         }
 
-    # Conservative PUT conditions
+    # PUT
     if (
         bearish_trend
         and bearish_candle
         and bearish_momentum
-        and 32 <= rsi <= 50
+        and put_rsi
     ):
+        DIAGNOSTICS["put_signals"] += 1
+
         return {
             "direction": "PUT",
-            "reason": (
-                "Bearish EMA trend, RSI confirmation "
-                "and negative candle momentum"
-            ),
+            "reason": "Bearish trend, candle, momentum and RSI confirmed",
             "rsi": round(rsi, 2),
             "ema9": round(e9, 6),
             "ema21": round(e21, 6),
             "ema50": round(e50, 6),
             "ema200": round(e200, 6)
         }
+
+    DIAGNOSTICS["no_signal"] += 1
 
     return {
         "direction": None,
@@ -203,5 +250,5 @@ def analyze_market(candles):
         "ema21": round(e21, 6),
         "ema50": round(e50, 6),
         "ema200": round(e200, 6)
-            }
-        
+    }
+    
