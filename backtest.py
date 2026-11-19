@@ -30,7 +30,7 @@ def download_candles():
 
     # End date is exclusive. Avoid requesting the current day.
     date_to = today
-    date_from = date_to - timedelta(days=30)
+    date_from = date_to - timedelta(days=7)
 
     print("Downloading Dukascopy EUR/USD M1 data")
     print("From:", date_from)
