@@ -10,7 +10,7 @@ permissions:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Get repository code
@@ -21,15 +21,20 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install requirements
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Install Python requirements
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Strategy Backtest
+      - name: Run EURUSD Backtest
         run: python backtest.py
 
-      - name: Upload Backtest CSV Reports
+      - name: Upload Backtest Reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -37,3 +42,4 @@ jobs:
           path: trades_*_unseen.csv
           if-no-files-found: warn
           retention-days: 7
+          
