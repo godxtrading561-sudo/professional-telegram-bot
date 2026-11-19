@@ -1,9 +1,9 @@
 
 """
-EUR/USD 1-minute historical backtest using Dukascopy.
-Free historical data; no API key required.
+EUR/USD historical backtest using Dukascopy free data.
+1-minute candles, chronological train/unseen testing.
 
-Research only. This is NOT Quotex OTC data.
+Research only. NOT Quotex OTC data.
 """
 
 import csv
@@ -21,93 +21,115 @@ from signal_engine import (
 EXPIRIES = (1, 2, 5)
 TRAIN_RATIO = 0.70
 MIN_HISTORY = 220
+
 DATA_FILE = Path("eurusd_data.csv")
 
 
 def download_candles():
     today = datetime.now(timezone.utc).date()
-    date_to = today - timedelta(days=1)
+
+    # End date is exclusive. Avoid requesting the current day.
+    date_to = today
     date_from = date_to - timedelta(days=30)
 
-    print("Downloading free Dukascopy EUR/USD 1-minute data...")
+    print("Downloading Dukascopy EUR/USD M1 data")
     print("From:", date_from)
     print("To:", date_to)
 
     command = [
-        "npx", "--yes", "dukascopy-node",
+        "npx",
+        "--yes",
+        "dukascopy-node",
         "-i", "eurusd",
         "-from", date_from.isoformat(),
         "-to", date_to.isoformat(),
         "-t", "m1",
+        "-p", "bid",
         "-f", "csv",
         "-dir", ".",
-        "-fn", DATA_FILE.name,
-        "-r", "2",
-        "-re"
+        "-fn", "eurusd_data",
+        "-r", "3",
+        "-rp", "1000",
+        "-fr"
     ]
+
+    # Remove an old file so stale data is never reused.
+    if DATA_FILE.exists():
+        DATA_FILE.unlink()
 
     subprocess.run(command, check=True)
 
     if not DATA_FILE.exists():
-        raise RuntimeError("Dukascopy CSV file was not created.")
+        raise RuntimeError(
+            "Dukascopy did not create eurusd_data.csv"
+        )
 
     candles = []
 
     with DATA_FILE.open(
-        "r", encoding="utf-8-sig", newline=""
+        "r",
+        encoding="utf-8-sig",
+        newline=""
     ) as file:
+
         reader = csv.DictReader(file)
 
         if not reader.fieldnames:
-            raise RuntimeError("CSV has no header.")
+            raise RuntimeError("Dukascopy CSV has no header.")
+
+        print("CSV columns:", reader.fieldnames)
 
         for row in reader:
-            normalized = {
-                str(k).strip().lower(): v
-                for k, v in row.items()
-                if k is not None
-            }
-
-            time_value = (
-                normalized.get("timestamp")
-                or normalized.get("time")
-                or normalized.get("datetime")
-                or normalized.get("date")
-            )
-
             try:
+                timestamp = int(float(row["timestamp"]))
+
+                candle_time = datetime.fromtimestamp(
+                    timestamp / 1000,
+                    tz=timezone.utc
+                ).isoformat()
+
                 candles.append({
-                    "time": str(time_value or ""),
-                    "open": float(normalized["open"]),
-                    "high": float(normalized["high"]),
-                    "low": float(normalized["low"]),
-                    "close": float(normalized["close"])
+                    "time": candle_time,
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"])
                 })
-            except (KeyError, TypeError, ValueError):
+
+            except (KeyError, TypeError, ValueError, OverflowError):
                 continue
 
     candles = validate_candles(candles)
 
-    if not candles:
-        raise RuntimeError(
-            "No valid OHLC candles found. Check Dukascopy CSV format."
-        )
-
-    unique = {}
-    for candle in candles:
-        unique[candle["time"]] = candle
+    # Remove duplicate timestamps and sort chronologically.
+    unique = {
+        candle["time"]: candle
+        for candle in candles
+    }
 
     candles = sorted(
         unique.values(),
-        key=lambda c: c["time"]
+        key=lambda candle: candle["time"]
     )
 
-    bullish = sum(c["close"] > c["open"] for c in candles)
-    bearish = sum(c["close"] < c["open"] for c in candles)
-    doji = sum(c["close"] == c["open"] for c in candles)
+    if not candles:
+        raise RuntimeError(
+            "No valid OHLC candles downloaded. "
+            "Check Dukascopy availability or CSV columns."
+        )
+
+    bullish = sum(
+        c["close"] > c["open"] for c in candles
+    )
+    bearish = sum(
+        c["close"] < c["open"] for c in candles
+    )
+    doji = sum(
+        c["close"] == c["open"] for c in candles
+    )
 
     print("\n========== DATA QUALITY ==========")
-    print("Valid candles:", len(candles))
+    print("Total valid candles:", len(candles))
     print("Bullish:", bullish)
     print("Bearish:", bearish)
     print("Doji:", doji)
@@ -115,13 +137,14 @@ def download_candles():
     print("Last candle:", candles[-1])
 
     if bullish + bearish == 0:
-        raise RuntimeError("All candles are flat. Backtest stopped.")
+        raise RuntimeError("All candles are flat.")
 
     return candles
 
 
 def print_diagnostics(label):
-    print(f"\n--- {label} DIAGNOSTICS ---")
+    print(f"\n========== {label} DIAGNOSTICS ==========")
+
     for name, count in get_diagnostics().items():
         print(f"{name}: {count}")
 
@@ -129,12 +152,17 @@ def print_diagnostics(label):
 def simulate(candles, start, end, expiry, label):
     reset_diagnostics()
 
-    wins = losses = ties = 0
+    wins = 0
+    losses = 0
+    ties = 0
     trades = []
+
     i = max(start, MIN_HISTORY - 1)
 
     while i + expiry < end:
+        # Only information available at signal time.
         signal = analyze_market(candles[:i + 1])
+
         direction = signal.get("direction")
 
         entry_i = i + 1
@@ -147,6 +175,7 @@ def simulate(candles, start, end, expiry, label):
             if exit_price == entry:
                 result = "TIE"
                 ties += 1
+
             elif (
                 direction == "CALL" and exit_price > entry
             ) or (
@@ -154,6 +183,7 @@ def simulate(candles, start, end, expiry, label):
             ):
                 result = "WIN"
                 wins += 1
+
             else:
                 result = "LOSS"
                 losses += 1
@@ -168,7 +198,9 @@ def simulate(candles, start, end, expiry, label):
                 "reason": signal.get("reason", "")
             })
 
+            # Avoid overlapping trades.
             i = exit_i
+
         else:
             i += 1
 
@@ -179,30 +211,20 @@ def simulate(candles, start, end, expiry, label):
         "losses": losses,
         "ties": ties,
         "trades": len(trades),
-        "win_rate": round(100 * wins / decided, 2) if decided else 0.0,
+        "win_rate": (
+            round(100 * wins / decided, 2)
+            if decided else 0.0
+        ),
         "log": trades
     }
 
     print_diagnostics(label)
+
     return stats
 
 
-def save_csv(filename, trades):
-    fields = [
-        "signal_time", "entry_time", "direction",
-        "entry", "exit", "result", "reason"
-    ]
-
-    with open(filename, "w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(trades)
-
-    print(f"Saved {filename}: {len(trades)} trades")
-
-
 def show_results(label, stats):
-    print(f"\n{label}")
+    print(f"\n========== {label} ==========")
     print("Trades:", stats["trades"])
     print("Wins:", stats["wins"])
     print("Losses:", stats["losses"])
@@ -210,30 +232,68 @@ def show_results(label, stats):
     print("Win rate:", str(stats["win_rate"]) + "%")
 
 
+def save_csv(filename, trades):
+    fields = [
+        "signal_time",
+        "entry_time",
+        "direction",
+        "entry",
+        "exit",
+        "result",
+        "reason"
+    ]
+
+    with open(
+        filename,
+        "w",
+        newline="",
+        encoding="utf-8"
+    ) as file:
+
+        writer = csv.DictWriter(
+            file,
+            fieldnames=fields
+        )
+
+        writer.writeheader()
+        writer.writerows(trades)
+
+    print(f"Saved {filename}: {len(trades)} trades")
+
+
 def main():
     candles = download_candles()
 
     if len(candles) < MIN_HISTORY + 40:
         raise RuntimeError(
-            f"Only {len(candles)} candles. More history is required."
+            f"Only {len(candles)} candles received. "
+            "Not enough data for testing."
         )
 
     split = int(len(candles) * TRAIN_RATIO)
 
-    print("\nTraining candles:", split)
-    print("Unseen candles:", len(candles) - split)
+    print("\n========== DATA SUMMARY ==========")
+    print("Total:", len(candles))
+    print("Training:", split)
+    print("Unseen:", len(candles) - split)
 
     for expiry in EXPIRIES:
         print(f"\n========== {expiry}-MINUTE EXPIRY ==========")
 
         train = simulate(
-            candles, MIN_HISTORY - 1, split,
-            expiry, f"TRAIN {expiry}m"
+            candles,
+            MIN_HISTORY - 1,
+            split,
+            expiry,
+            f"TRAIN {expiry}m"
         )
 
         unseen = simulate(
-            candles, max(split, MIN_HISTORY - 1),
-            len(candles), expiry, f"UNSEEN {expiry}m"
+            candles,
+            max(split, MIN_HISTORY - 1),
+            len(candles),
+            expiry,
+            f"UNSEEN {expiry}m"
         )
 
         show_results("TRAIN RESULTS", train)
@@ -244,12 +304,12 @@ def main():
             unseen["log"]
         )
 
-    print("\nBacktest complete.")
-    print("Research only. No future accuracy is guaranteed.")
+    print("\n========== BACKTEST COMPLETE ==========")
+    print("Research only; no future accuracy is guaranteed.")
     print("Dukascopy EUR/USD is not Quotex OTC data.")
     print("Payout, spread, slippage and execution delay are not modeled.")
 
 
 if __name__ == "__main__":
     main()
-  
+                                
