@@ -1,8 +1,10 @@
 
 """
-EUR/USD historical backtest using Yahoo Finance.
-Includes separate signal diagnostics for each test.
-Research only: not Quotex OTC data and not live trading.
+Professional EUR/USD Backtest with Candle Diagnostics.
+
+Data: Yahoo Finance EUR/USD (EURUSD=X)
+Research only: Not Quotex OTC data.
+No live trading and no guaranteed accuracy.
 """
 
 import csv
@@ -36,11 +38,20 @@ def fetch_free_candles():
     if df is None or df.empty:
         raise RuntimeError("Yahoo Finance returned no candles.")
 
-    if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
-        df.columns = df.columns.get_level_values(0)
+    # Handle Yahoo Finance MultiIndex columns safely.
+    if getattr(df.columns, "nlevels", 1) > 1:
+        if SYMBOL in df.columns.get_level_values(-1):
+            df = df.xs(
+                SYMBOL,
+                axis=1,
+                level=-1
+            )
+        else:
+            df.columns = df.columns.get_level_values(0)
 
     required = ["Open", "High", "Low", "Close"]
-    missing = [col for col in required if col not in df.columns]
+
+    missing = [name for name in required if name not in df.columns]
 
     if missing:
         raise RuntimeError(f"Missing Yahoo columns: {missing}")
@@ -49,24 +60,59 @@ def fetch_free_candles():
 
     for timestamp, row in df.iterrows():
         try:
-            candles.append({
+            candle = {
                 "time": timestamp.isoformat(),
                 "open": float(row["Open"]),
                 "high": float(row["High"]),
                 "low": float(row["Low"]),
                 "close": float(row["Close"])
-            })
-        except (TypeError, ValueError):
+            }
+
+            candles.append(candle)
+
+        except (TypeError, ValueError, KeyError):
             continue
 
     candles = validate_candles(candles)
 
-    print(f"Downloaded {len(candles)} valid candles.")
+    print(f"\nDownloaded valid candles: {len(candles)}")
+
+    if not candles:
+        raise RuntimeError("No valid OHLC candles received.")
+
+    # Inspect candle body data.
+    bullish = sum(
+        1 for c in candles if c["close"] > c["open"]
+    )
+
+    bearish = sum(
+        1 for c in candles if c["close"] < c["open"]
+    )
+
+    doji = sum(
+        1 for c in candles if c["close"] == c["open"]
+    )
+
+    print("\n========== CANDLE DATA CHECK ==========")
+    print("Bullish candles:", bullish)
+    print("Bearish candles:", bearish)
+    print("Doji candles:", doji)
+
+    print("\nFirst 5 candles:")
+    for candle in candles[:5]:
+        print(candle)
+
+    if bullish + bearish == 0:
+        raise RuntimeError(
+            "All candles have equal Open and Close. "
+            "Cannot run a meaningful candle-based backtest."
+        )
+
     return candles
 
 
 def print_diagnostics(label):
-    print(f"\n--- {label} DIAGNOSTICS ---")
+    print(f"\n========== {label} DIAGNOSTICS ==========")
 
     stats = get_diagnostics()
 
@@ -77,13 +123,16 @@ def print_diagnostics(label):
 def simulate(candles, start, end, expiry, label):
     reset_diagnostics()
 
-    wins = losses = ties = 0
+    wins = 0
+    losses = 0
+    ties = 0
     trades = []
 
     i = max(start, MIN_HISTORY - 1)
 
     while i + expiry < end:
-        # Only candles available at signal time are used.
+
+        # Analyze only data available at signal time.
         signal = analyze_market(candles[:i + 1])
 
         direction = signal.get("direction")
@@ -92,6 +141,7 @@ def simulate(candles, start, end, expiry, label):
         exit_i = entry_i + expiry - 1
 
         if direction in ("CALL", "PUT") and exit_i < end:
+
             entry = candles[entry_i]["open"]
             exit_price = candles[exit_i]["close"]
 
@@ -121,7 +171,7 @@ def simulate(candles, start, end, expiry, label):
                 "reason": signal.get("reason", "")
             })
 
-            # Avoid overlapping trades.
+            # Do not overlap trades.
             i = exit_i
 
         else:
@@ -146,6 +196,15 @@ def simulate(candles, start, end, expiry, label):
     return stats
 
 
+def print_results(label, stats):
+    print(f"\n========== {label} RESULTS ==========")
+    print("Trades:", stats["trades"])
+    print("Wins:", stats["wins"])
+    print("Losses:", stats["losses"])
+    print("Ties:", stats["ties"])
+    print("Win rate:", str(stats["win_rate"]) + "%")
+
+
 def save_csv(filename, trades):
     fields = [
         "signal_time",
@@ -157,12 +216,22 @@ def save_csv(filename, trades):
         "reason"
     ]
 
-    with open(filename, "w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=fields)
+    with open(
+        filename,
+        "w",
+        newline="",
+        encoding="utf-8"
+    ) as file:
+
+        writer = csv.DictWriter(
+            file,
+            fieldnames=fields
+        )
+
         writer.writeheader()
         writer.writerows(trades)
 
-    print(f"Saved: {filename} ({len(trades)} trades)")
+    print(f"Saved {filename}: {len(trades)} trades")
 
 
 def main():
@@ -171,19 +240,21 @@ def main():
     if len(candles) < MIN_HISTORY + 40:
         raise RuntimeError(
             f"Only {len(candles)} candles received. "
-            "Not enough data for a meaningful test."
+            "Not enough data for this test."
         )
 
     split = int(len(candles) * TRAIN_RATIO)
 
-    print(
-        f"\nValid candles: {len(candles)}"
-        f" | Training: {split}"
-        f" | Unseen: {len(candles) - split}"
-    )
+    print("\n========== DATA SUMMARY ==========")
+    print("Total candles:", len(candles))
+    print("Training candles:", split)
+    print("Unseen candles:", len(candles) - split)
 
     for expiry in EXPIRIES:
-        print(f"\n========== {expiry}-MINUTE EXPIRY ==========")
+
+        print(
+            f"\n\n========== {expiry}-MINUTE EXPIRY =========="
+        )
 
         train = simulate(
             candles,
@@ -201,28 +272,25 @@ def main():
             f"UNSEEN {expiry}m"
         )
 
-        for label, stats in (
-            ("TRAIN", train),
-            ("UNSEEN", unseen)
-        ):
-            print(f"\n{label} RESULTS:")
-            print(f"Trades: {stats['trades']}")
-            print(f"Wins: {stats['wins']}")
-            print(f"Losses: {stats['losses']}")
-            print(f"Ties: {stats['ties']}")
-            print(f"Win rate: {stats['win_rate']}%")
+        print_results("TRAIN", train)
+        print_results("UNSEEN", unseen)
 
         save_csv(
             f"trades_{expiry}m_unseen.csv",
             unseen["log"]
         )
 
+    print("\n========== BACKTEST COMPLETE ==========")
     print(
-        "\nResearch only. Results do not guarantee future performance. "
-        "Payout, spread, slippage and execution delay are not included."
+        "Research only. Historical results do not guarantee "
+        "future performance. Payout, spread, slippage and "
+        "execution delay are not included."
+    )
+    print(
+        "Yahoo EUR/USD data is not Quotex OTC market data."
     )
 
 
 if __name__ == "__main__":
     main()
-                                
+        
