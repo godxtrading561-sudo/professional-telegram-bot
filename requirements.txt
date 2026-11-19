@@ -1,5 +1,2 @@
 
-requests
-yfinance
-pandas
-numpy
+# No external Python packages required.
