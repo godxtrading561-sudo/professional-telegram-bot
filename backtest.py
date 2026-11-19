@@ -1,14 +1,19 @@
 
 """
 EUR/USD historical backtest using Yahoo Finance.
+Includes separate signal diagnostics for each test.
 Research only: not Quotex OTC data and not live trading.
-Yahoo Finance 1-minute history is limited (typically 7 days).
 """
+
 import csv
-from datetime import datetime, timezone
 import yfinance as yf
 
-from signal_engine import validate_candles, analyze_market
+from signal_engine import (
+    validate_candles,
+    analyze_market,
+    reset_diagnostics,
+    get_diagnostics
+)
 
 EXPIRIES = (1, 2, 5)
 TRAIN_RATIO = 0.70
@@ -18,6 +23,7 @@ SYMBOL = "EURUSD=X"
 
 def fetch_free_candles():
     print(f"Downloading {SYMBOL} 1-minute historical data...")
+
     df = yf.download(
         SYMBOL,
         period="7d",
@@ -30,16 +36,17 @@ def fetch_free_candles():
     if df is None or df.empty:
         raise RuntimeError("Yahoo Finance returned no candles.")
 
-    # Handle both normal and MultiIndex column formats.
     if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
         df.columns = df.columns.get_level_values(0)
 
     required = ["Open", "High", "Low", "Close"]
     missing = [col for col in required if col not in df.columns]
+
     if missing:
         raise RuntimeError(f"Missing Yahoo columns: {missing}")
 
     candles = []
+
     for timestamp, row in df.iterrows():
         try:
             candles.append({
@@ -53,18 +60,32 @@ def fetch_free_candles():
             continue
 
     candles = validate_candles(candles)
+
     print(f"Downloaded {len(candles)} valid candles.")
     return candles
 
 
-def simulate(candles, start, end, expiry):
+def print_diagnostics(label):
+    print(f"\n--- {label} DIAGNOSTICS ---")
+
+    stats = get_diagnostics()
+
+    for name, count in stats.items():
+        print(f"{name}: {count}")
+
+
+def simulate(candles, start, end, expiry, label):
+    reset_diagnostics()
+
     wins = losses = ties = 0
     trades = []
+
     i = max(start, MIN_HISTORY - 1)
 
     while i + expiry < end:
-        # Engine receives only candles available at signal time.
+        # Only candles available at signal time are used.
         signal = analyze_market(candles[:i + 1])
+
         direction = signal.get("direction")
 
         entry_i = i + 1
@@ -77,6 +98,7 @@ def simulate(candles, start, end, expiry):
             if exit_price == entry:
                 result = "TIE"
                 ties += 1
+
             elif (
                 direction == "CALL" and exit_price > entry
             ) or (
@@ -84,6 +106,7 @@ def simulate(candles, start, end, expiry):
             ):
                 result = "WIN"
                 wins += 1
+
             else:
                 result = "LOSS"
                 losses += 1
@@ -100,29 +123,45 @@ def simulate(candles, start, end, expiry):
 
             # Avoid overlapping trades.
             i = exit_i
+
         else:
             i += 1
 
     decided = wins + losses
-    return {
+
+    stats = {
         "wins": wins,
         "losses": losses,
         "ties": ties,
         "trades": len(trades),
-        "win_rate": round(100 * wins / decided, 2) if decided else 0.0,
+        "win_rate": (
+            round(100 * wins / decided, 2)
+            if decided else 0.0
+        ),
         "log": trades
     }
+
+    print_diagnostics(label)
+
+    return stats
 
 
 def save_csv(filename, trades):
     fields = [
-        "signal_time", "entry_time", "direction",
-        "entry", "exit", "result", "reason"
+        "signal_time",
+        "entry_time",
+        "direction",
+        "entry",
+        "exit",
+        "result",
+        "reason"
     ]
+
     with open(filename, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fields)
         writer.writeheader()
         writer.writerows(trades)
+
     print(f"Saved: {filename} ({len(trades)} trades)")
 
 
@@ -136,24 +175,47 @@ def main():
         )
 
     split = int(len(candles) * TRAIN_RATIO)
+
     print(
-        f"Valid candles: {len(candles)} | "
-        f"Training: {split} | Unseen: {len(candles) - split}"
+        f"\nValid candles: {len(candles)}"
+        f" | Training: {split}"
+        f" | Unseen: {len(candles) - split}"
     )
 
     for expiry in EXPIRIES:
-        train = simulate(candles, MIN_HISTORY - 1, split, expiry)
-        unseen = simulate(candles, max(split, MIN_HISTORY - 1), len(candles), expiry)
+        print(f"\n========== {expiry}-MINUTE EXPIRY ==========")
 
-        print(f"\n{expiry}-minute expiry")
-        for label, stats in (("TRAIN", train), ("UNSEEN", unseen)):
-            print(
-                f"{label}: trades={stats['trades']} "
-                f"wins={stats['wins']} losses={stats['losses']} "
-                f"ties={stats['ties']} win_rate={stats['win_rate']}%"
-            )
+        train = simulate(
+            candles,
+            MIN_HISTORY - 1,
+            split,
+            expiry,
+            f"TRAIN {expiry}m"
+        )
 
-        save_csv(f"trades_{expiry}m_unseen.csv", unseen["log"])
+        unseen = simulate(
+            candles,
+            max(split, MIN_HISTORY - 1),
+            len(candles),
+            expiry,
+            f"UNSEEN {expiry}m"
+        )
+
+        for label, stats in (
+            ("TRAIN", train),
+            ("UNSEEN", unseen)
+        ):
+            print(f"\n{label} RESULTS:")
+            print(f"Trades: {stats['trades']}")
+            print(f"Wins: {stats['wins']}")
+            print(f"Losses: {stats['losses']}")
+            print(f"Ties: {stats['ties']}")
+            print(f"Win rate: {stats['win_rate']}%")
+
+        save_csv(
+            f"trades_{expiry}m_unseen.csv",
+            unseen["log"]
+        )
 
     print(
         "\nResearch only. Results do not guarantee future performance. "
@@ -163,3 +225,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+                                
