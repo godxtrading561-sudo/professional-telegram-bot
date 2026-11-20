@@ -1,9 +1,10 @@
 
 """
-Improved EUR/USD backtest.
-Separate CALL/PUT results.
+Professional EUR/USD Backtest
+30-day historical data from Dukascopy.
+Separate CALL and PUT reports.
 Missing-minute protection.
-Research only; not Quotex OTC data.
+Research only. NOT Quotex OTC data.
 """
 
 import csv
@@ -11,11 +12,12 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from signal_engine import validate_candles, analyze_market, reset_diagnostics
+from signal_engine import validate_candles, analyze_market
 
 EXPIRIES = (1, 2, 5)
 TRAIN_RATIO = 0.70
 MIN_HISTORY = 220
+
 DATA_FILE = Path("eurusd_data.csv")
 
 
@@ -24,8 +26,14 @@ def download_candles():
     date_to = today
     date_from = date_to - timedelta(days=30)
 
+    print("Downloading 30-day Dukascopy EUR/USD data...")
+    print("From:", date_from)
+    print("To:", date_to)
+
     command = [
-        "npx", "--yes", "dukascopy-node",
+        "npx",
+        "--yes",
+        "dukascopy-node",
         "-i", "eurusd",
         "-from", date_from.isoformat(),
         "-to", date_to.isoformat(),
@@ -42,61 +50,112 @@ def download_candles():
     if DATA_FILE.exists():
         DATA_FILE.unlink()
 
-    print("Downloading 30-day Dukascopy EUR/USD data...")
     subprocess.run(command, check=True)
 
     if not DATA_FILE.exists():
-        raise RuntimeError("Historical data file not found.")
+        raise RuntimeError("Dukascopy CSV file was not created.")
 
-    candles = []
+    raw_candles = []
 
     with DATA_FILE.open(
-        "r", encoding="utf-8-sig", newline=""
+        "r",
+        encoding="utf-8-sig",
+        newline=""
     ) as file:
+
         reader = csv.DictReader(file)
+
+        if not reader.fieldnames:
+            raise RuntimeError("CSV header is missing.")
+
+        print("CSV columns:", reader.fieldnames)
 
         for row in reader:
             try:
                 timestamp = int(float(row["timestamp"]))
+
                 candle_time = datetime.fromtimestamp(
                     timestamp / 1000,
                     tz=timezone.utc
-                )
+                ).isoformat()
 
-                candles.append({
-                    "time": candle_time.isoformat(),
-                    "timestamp": int(candle_time.timestamp()),
+                raw_candles.append({
+                    "time": candle_time,
                     "open": float(row["open"]),
                     "high": float(row["high"]),
                     "low": float(row["low"]),
                     "close": float(row["close"])
                 })
-            except (KeyError, ValueError, TypeError, OverflowError):
+
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                OverflowError
+            ):
                 continue
 
-    candles = validate_candles(candles)
+    if not raw_candles:
+        raise RuntimeError("No candles found in downloaded CSV.")
 
-    unique = {c["time"]: c for c in candles}
-    candles = sorted(
+    # Remove duplicate times and sort BEFORE validation.
+    unique = {
+        candle["time"]: candle
+        for candle in raw_candles
+    }
+
+    sorted_candles = sorted(
         unique.values(),
-        key=lambda c: c["timestamp"]
+        key=lambda candle: candle["time"]
     )
 
-    if len(candles) < MIN_HISTORY + 100:
-        raise RuntimeError("Not enough historical candles.")
+    # Validation keeps the original time field.
+    candles = validate_candles(sorted_candles)
 
+    # Rebuild timestamp after validation.
+    for candle in candles:
+        candle["timestamp"] = int(
+            datetime.fromisoformat(
+                candle["time"]
+            ).timestamp()
+        )
+
+    if len(candles) < MIN_HISTORY + 100:
+        raise RuntimeError(
+            f"Not enough valid candles: {len(candles)}"
+        )
+
+    bullish = sum(
+        candle["close"] > candle["open"]
+        for candle in candles
+    )
+
+    bearish = sum(
+        candle["close"] < candle["open"]
+        for candle in candles
+    )
+
+    doji = sum(
+        candle["close"] == candle["open"]
+        for candle in candles
+    )
+
+    print("\n========== DATA QUALITY ==========")
     print("Valid candles:", len(candles))
-    print("First:", candles[0]["time"])
-    print("Last:", candles[-1]["time"])
+    print("Bullish:", bullish)
+    print("Bearish:", bearish)
+    print("Doji:", doji)
+    print("First candle:", candles[0]["time"])
+    print("Last candle:", candles[-1]["time"])
 
     return candles
 
 
 def has_contiguous_minutes(candles, start, end):
-    for j in range(start, end):
+    for index in range(start, end):
         difference = (
-            candles[j + 1]["timestamp"]
-            - candles[j]["timestamp"]
+            candles[index + 1]["timestamp"]
+            - candles[index]["timestamp"]
         )
 
         if difference != 60:
@@ -106,94 +165,135 @@ def has_contiguous_minutes(candles, start, end):
 
 
 def simulate(candles, start, end, expiry):
-    reset_diagnostics()
-
     trades = []
-    i = max(start, MIN_HISTORY - 1)
 
-    while i + expiry < end:
-        signal = analyze_market(candles[:i + 1])
+    index = max(start, MIN_HISTORY - 1)
+
+    while index + expiry < end:
+        signal = analyze_market(candles[:index + 1])
         direction = signal.get("direction")
 
-        entry_i = i + 1
-        exit_i = entry_i + expiry - 1
-
         if direction not in ("CALL", "PUT"):
-            i += 1
+            index += 1
             continue
 
-        if exit_i >= end:
+        entry_index = index + 1
+        exit_index = entry_index + expiry - 1
+
+        if exit_index >= end:
             break
 
-        # Reject trades crossing missing minutes.
-        if not has_contiguous_minutes(candles, i, exit_i):
-            i += 1
+        # Do not simulate trades across missing minutes.
+        if not has_contiguous_minutes(
+            candles,
+            index,
+            exit_index
+        ):
+            index += 1
             continue
 
-        entry = candles[entry_i]["open"]
-        exit_price = candles[exit_i]["close"]
+        entry_price = candles[entry_index]["open"]
+        exit_price = candles[exit_index]["close"]
 
-        if abs(exit_price - entry) < 1e-10:
+        if abs(exit_price - entry_price) < 1e-10:
             result = "TIE"
+
         elif (
-            direction == "CALL" and exit_price > entry
+            direction == "CALL"
+            and exit_price > entry_price
         ) or (
-            direction == "PUT" and exit_price < entry
+            direction == "PUT"
+            and exit_price < entry_price
         ):
             result = "WIN"
+
         else:
             result = "LOSS"
 
         trades.append({
-            "signal_time": candles[i]["time"],
-            "entry_time": candles[entry_i]["time"],
-            "exit_time": candles[exit_i]["time"],
+            "signal_time": candles[index]["time"],
+            "entry_time": candles[entry_index]["time"],
+            "exit_time": candles[exit_index]["time"],
             "direction": direction,
             "expiry_minutes": expiry,
-            "entry": entry,
+            "entry": entry_price,
             "exit": exit_price,
             "result": result,
             "reason": signal.get("reason", "")
         })
 
-        i = exit_i
+        # Prevent overlapping trades.
+        index = exit_index
 
     return trades
 
 
 def show_stats(label, trades):
-    print(f"\n===== {label} =====")
+    print(f"\n========== {label} ==========")
 
     for direction in ("CALL", "PUT"):
         selected = [
-            t for t in trades
-            if t["direction"] == direction
+            trade for trade in trades
+            if trade["direction"] == direction
         ]
 
-        wins = sum(t["result"] == "WIN" for t in selected)
-        losses = sum(t["result"] == "LOSS" for t in selected)
-        ties = sum(t["result"] == "TIE" for t in selected)
+        wins = sum(
+            trade["result"] == "WIN"
+            for trade in selected
+        )
+
+        losses = sum(
+            trade["result"] == "LOSS"
+            for trade in selected
+        )
+
+        ties = sum(
+            trade["result"] == "TIE"
+            for trade in selected
+        )
 
         decided = wins + losses
-        accuracy = 100 * wins / decided if decided else 0
+
+        accuracy = (
+            100 * wins / decided
+            if decided else 0
+        )
 
         print(
-            f"{direction}: Trades={len(selected)}, "
-            f"Wins={wins}, Losses={losses}, Ties={ties}, "
+            f"{direction}: "
+            f"Trades={len(selected)}, "
+            f"Wins={wins}, "
+            f"Losses={losses}, "
+            f"Ties={ties}, "
             f"Win rate={accuracy:.2f}%"
         )
 
-    wins = sum(t["result"] == "WIN" for t in trades)
-    losses = sum(t["result"] == "LOSS" for t in trades)
-    ties = sum(t["result"] == "TIE" for t in trades)
+    wins = sum(
+        trade["result"] == "WIN"
+        for trade in trades
+    )
+
+    losses = sum(
+        trade["result"] == "LOSS"
+        for trade in trades
+    )
+
+    ties = sum(
+        trade["result"] == "TIE"
+        for trade in trades
+    )
 
     decided = wins + losses
-    accuracy = 100 * wins / decided if decided else 0
 
-    print("TOTAL TRADES:", len(trades))
-    print("TOTAL WINS:", wins)
-    print("TOTAL LOSSES:", losses)
-    print("TOTAL TIES:", ties)
+    accuracy = (
+        100 * wins / decided
+        if decided else 0
+    )
+
+    print("\nTOTAL TRADES:", len(trades))
+    print("WINS:", wins)
+    print("LOSSES:", losses)
+    print("TIES:", ties)
     print(f"OVERALL WIN RATE: {accuracy:.2f}%")
 
 
@@ -212,20 +312,34 @@ def save_reports(expiry, trades):
 
     for direction in ("CALL", "PUT"):
         selected = [
-            t for t in trades
-            if t["direction"] == direction
+            trade for trade in trades
+            if trade["direction"] == direction
         ]
 
-        filename = f"trades_{expiry}m_{direction.lower()}_unseen.csv"
+        filename = (
+            f"trades_{expiry}m_"
+            f"{direction.lower()}_unseen.csv"
+        )
 
         with open(
-            filename, "w", newline="", encoding="utf-8"
+            filename,
+            "w",
+            newline="",
+            encoding="utf-8"
         ) as file:
-            writer = csv.DictWriter(file, fieldnames=fields)
+
+            writer = csv.DictWriter(
+                file,
+                fieldnames=fields
+            )
+
             writer.writeheader()
             writer.writerows(selected)
 
-        print("Saved:", filename, len(selected))
+        print(
+            f"Saved {filename}: "
+            f"{len(selected)} trades"
+        )
 
 
 def main():
@@ -233,29 +347,48 @@ def main():
 
     split = int(len(candles) * TRAIN_RATIO)
 
-    print("\nTOTAL CANDLES:", len(candles))
-    print("TRAINING CANDLES:", split)
-    print("UNSEEN CANDLES:", len(candles) - split)
+    if split <= MIN_HISTORY:
+        raise RuntimeError("Training data is too short.")
+
+    print("\n========== DATA SUMMARY ==========")
+    print("Total candles:", len(candles))
+    print("Training candles:", split)
+    print("Unseen candles:", len(candles) - split)
 
     for expiry in EXPIRIES:
-        print(f"\n========== {expiry}-MINUTE EXPIRY ==========")
-
-        train = simulate(
-            candles, MIN_HISTORY - 1, split, expiry
+        print(
+            f"\n========== {expiry}-MINUTE EXPIRY =========="
         )
 
-        unseen = simulate(
-            candles, split, len(candles), expiry
+        train_trades = simulate(
+            candles,
+            MIN_HISTORY - 1,
+            split,
+            expiry
         )
 
-        show_stats(f"TRAIN {expiry}m", train)
-        show_stats(f"UNSEEN {expiry}m", unseen)
+        unseen_trades = simulate(
+            candles,
+            split,
+            len(candles),
+            expiry
+        )
 
-        save_reports(expiry, unseen)
+        show_stats(
+            f"TRAIN {expiry}m",
+            train_trades
+        )
 
-    print("\nBACKTEST COMPLETE")
-    print("Research only. No accuracy is guaranteed.")
-    print("Dukascopy EUR/USD is not Quotex OTC data.")
+        show_stats(
+            f"UNSEEN {expiry}m",
+            unseen_trades
+        )
+
+        save_reports(expiry, unseen_trades)
+
+    print("\n========== BACKTEST COMPLETE ==========")
+    print("Research only. Accuracy is not guaranteed.")
+    print("Dukascopy EUR/USD is NOT Quotex OTC data.")
     print("Payout, spread and execution delay are not modeled.")
 
 
