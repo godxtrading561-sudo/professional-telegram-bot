@@ -3,7 +3,7 @@
 Professional EUR/USD Backtest
 30-day historical data from Dukascopy.
 Separate CALL and PUT reports.
-Missing-minute protection.
+Missing-minute protection for indicator history and trades.
 Research only. NOT Quotex OTC data.
 """
 
@@ -62,7 +62,6 @@ def download_candles():
         encoding="utf-8-sig",
         newline=""
     ) as file:
-
         reader = csv.DictReader(file)
 
         if not reader.fieldnames:
@@ -98,7 +97,7 @@ def download_candles():
     if not raw_candles:
         raise RuntimeError("No candles found in downloaded CSV.")
 
-    # Remove duplicate times and sort BEFORE validation.
+    # Remove duplicate times and sort.
     unique = {
         candle["time"]: candle
         for candle in raw_candles
@@ -109,10 +108,9 @@ def download_candles():
         key=lambda candle: candle["time"]
     )
 
-    # Validation keeps the original time field.
     candles = validate_candles(sorted_candles)
 
-    # Rebuild timestamp after validation.
+    # Restore Unix timestamp after validation.
     for candle in candles:
         candle["timestamp"] = int(
             datetime.fromisoformat(
@@ -140,15 +138,43 @@ def download_candles():
         for candle in candles
     )
 
+    gaps = sum(
+        candles[i]["timestamp"]
+        - candles[i - 1]["timestamp"] != 60
+        for i in range(1, len(candles))
+    )
+
     print("\n========== DATA QUALITY ==========")
     print("Valid candles:", len(candles))
     print("Bullish:", bullish)
     print("Bearish:", bearish)
     print("Doji:", doji)
+    print("Missing-minute gaps:", gaps)
     print("First candle:", candles[0]["time"])
     print("Last candle:", candles[-1]["time"])
 
     return candles
+
+
+def build_contiguous_starts(candles):
+    """
+    For every candle index, store the beginning
+    of its current uninterrupted 1-minute segment.
+    """
+    starts = [0] * len(candles)
+
+    for i in range(1, len(candles)):
+        difference = (
+            candles[i]["timestamp"]
+            - candles[i - 1]["timestamp"]
+        )
+
+        if difference == 60:
+            starts[i] = starts[i - 1]
+        else:
+            starts[i] = i
+
+    return starts
 
 
 def has_contiguous_minutes(candles, start, end):
@@ -164,31 +190,46 @@ def has_contiguous_minutes(candles, start, end):
     return True
 
 
-def simulate(candles, start, end, expiry):
+def simulate(candles, run_start, run_end, expiry, segment_starts):
     trades = []
 
-    index = max(start, MIN_HISTORY - 1)
+    # Signals are evaluated at candle close.
+    # Entry is at the next candle open.
+    index = max(run_start, MIN_HISTORY - 1)
 
-    while index + expiry < end:
-        signal = analyze_market(candles[:index + 1])
-        direction = signal.get("direction")
+    while index + expiry < run_end:
+        segment_start = segment_starts[index]
 
-        if direction not in ("CALL", "PUT"):
+        # Do not calculate indicators across a data gap.
+        contiguous_history = index - segment_start + 1
+
+        if contiguous_history < MIN_HISTORY:
             index += 1
             continue
 
         entry_index = index + 1
         exit_index = entry_index + expiry - 1
 
-        if exit_index >= end:
+        if exit_index >= run_end:
             break
 
-        # Do not simulate trades across missing minutes.
+        # Ensure signal candle, entry and expiry candles
+        # form one uninterrupted minute sequence.
         if not has_contiguous_minutes(
             candles,
             index,
             exit_index
         ):
+            index += 1
+            continue
+
+        # Only pass the uninterrupted history segment.
+        history = candles[segment_start:index + 1]
+
+        signal = analyze_market(history)
+        direction = signal.get("direction")
+
+        if direction not in ("CALL", "PUT"):
             index += 1
             continue
 
@@ -222,7 +263,8 @@ def simulate(candles, start, end, expiry):
             "reason": signal.get("reason", "")
         })
 
-        # Prevent overlapping trades.
+        # Next signal may be evaluated at the expiry candle close.
+        # Its entry will be the following candle, so trades do not overlap.
         index = exit_index
 
     return trades
@@ -327,7 +369,6 @@ def save_reports(expiry, trades):
             newline="",
             encoding="utf-8"
         ) as file:
-
             writer = csv.DictWriter(
                 file,
                 fieldnames=fields
@@ -350,6 +391,8 @@ def main():
     if split <= MIN_HISTORY:
         raise RuntimeError("Training data is too short.")
 
+    segment_starts = build_contiguous_starts(candles)
+
     print("\n========== DATA SUMMARY ==========")
     print("Total candles:", len(candles))
     print("Training candles:", split)
@@ -364,14 +407,16 @@ def main():
             candles,
             MIN_HISTORY - 1,
             split,
-            expiry
+            expiry,
+            segment_starts
         )
 
         unseen_trades = simulate(
             candles,
             split,
             len(candles),
-            expiry
+            expiry,
+            segment_starts
         )
 
         show_stats(
