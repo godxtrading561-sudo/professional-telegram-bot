@@ -3,12 +3,21 @@ name: Professional Telegram Bot
 
 on:
   workflow_dispatch:
+    inputs:
+      task:
+        description: "Choose what to run"
+        required: true
+        type: choice
+        options:
+          - backtest
+          - telegram_test
 
 permissions:
   contents: read
 
 jobs:
   backtest:
+    if: inputs.task == 'backtest'
     name: EURUSD Backtest
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -22,20 +31,15 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: "22"
-
-      - name: Install Python requirements
+      - name: Install requirements
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run EURUSD Backtest
+      - name: Run backtest
         run: python backtest.py
 
-      - name: Upload Backtest Reports
+      - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -43,3 +47,31 @@ jobs:
           path: trades_*_unseen.csv
           if-no-files-found: warn
           retention-days: 7
+
+  telegram_test:
+    if: inputs.task == 'telegram_test'
+    name: Telegram Connection Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Get repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Test Telegram connection
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+        run: |
+          python -c "import os, requests; t=os.environ['BOT_TOKEN']; c=os.environ['CHANNEL_ID']; r=requests.post('https://api.telegram.org/bot'+t+'/sendMessage', json={'chat_id':c,'text':'PROFESSIONAL BOT — CONNECTION TEST SUCCESSFUL'}, timeout=20); r.raise_for_status(); assert r.json().get('ok'), r.text; print('Telegram connection successful')"
+
