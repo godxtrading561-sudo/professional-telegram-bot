@@ -1,308 +1,242 @@
 
-"""
-Professional Signal Engine v2
-Research only: EUR/USD historical data.
-Not Quotex OTC data. No guaranteed accuracy.
-"""
+import pandas as pd
+import numpy as np
 
-from math import isfinite
+PAIRS = [
+    "EURUSD_otc",
+    "GBPUSD_otc",
+    "USDJPY_otc",
+    "AUDCAD_otc",
+    "EURJPY_otc",
+    "GBPJPY_otc",
+]
 
+TIMEFRAME = "1 Minute"
 MIN_CANDLES = 220
-
-DIAGNOSTICS = {
-    "total_checks": 0,
-    "insufficient_history": 0,
-    "call_trend_pass": 0,
-    "put_trend_pass": 0,
-    "call_candle_pass": 0,
-    "put_candle_pass": 0,
-    "call_momentum_pass": 0,
-    "put_momentum_pass": 0,
-    "call_rsi_pass": 0,
-    "put_rsi_pass": 0,
-    "call_signals": 0,
-    "put_signals": 0,
-    "no_signal": 0,
-}
+MIN_SCORE = 4
 
 
-def reset_diagnostics():
-    for key in DIAGNOSTICS:
-        DIAGNOSTICS[key] = 0
+def prepare_candles(candles):
+    df = pd.DataFrame(candles).copy()
+
+    required = ["open", "high", "low", "close"]
+    for col in required:
+        if col not in df.columns:
+            raise ValueError(f"Missing candle column: {col}")
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.dropna(subset=required).reset_index(drop=True)
+
+    df = df[
+        (df["high"] >= df["low"]) &
+        (df["high"] >= df["open"]) &
+        (df["high"] >= df["close"]) &
+        (df["low"] <= df["open"]) &
+        (df["low"] <= df["close"])
+    ].copy()
+
+    return df.reset_index(drop=True)
 
 
-def get_diagnostics():
-    return DIAGNOSTICS.copy()
+def calculate_indicators(df):
+    df = df.copy()
+
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+
+    df["ema9"] = close.ewm(span=9, adjust=False).mean()
+    df["ema21"] = close.ewm(span=21, adjust=False).mean()
+    df["ema50"] = close.ewm(span=50, adjust=False).mean()
+    df["ema200"] = close.ewm(span=200, adjust=False).mean()
+
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = gain.ewm(alpha=1 / 14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / 14, adjust=False).mean()
+
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    df["rsi"] = 100 - (100 / (1 + rs))
+    df["rsi"] = df["rsi"].fillna(50)
+
+    middle = close.rolling(20).mean()
+    std = close.rolling(20).std()
+
+    df["bb_upper"] = middle + (2 * std)
+    df["bb_lower"] = middle - (2 * std)
+    df["bb_middle"] = middle
+
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+
+    df["macd"] = ema12 - ema26
+    df["macd_signal"] = df["macd"].ewm(
+        span=9, adjust=False
+    ).mean()
+
+    df["support"] = low.rolling(20).min().shift(1)
+    df["resistance"] = high.rolling(20).max().shift(1)
+
+    return df
 
 
-def validate_candles(candles):
-    clean = []
+def candle_patterns(df):
+    current = df.iloc[-1]
+    previous = df.iloc[-2]
 
-    for candle in candles:
-        try:
-            item = {
-                "time": str(candle.get("time", "")),
-                "open": float(candle["open"]),
-                "high": float(candle["high"]),
-                "low": float(candle["low"]),
-                "close": float(candle["close"]),
-            }
+    body = abs(current["close"] - current["open"])
+    candle_range = current["high"] - current["low"]
 
-            o, h, l, c = (
-                item["open"], item["high"],
-                item["low"], item["close"]
-            )
+    if candle_range <= 0:
+        return None, None
 
-            if not all(isfinite(v) and v > 0 for v in (o, h, l, c)):
-                continue
+    bullish_engulfing = (
+        previous["close"] < previous["open"]
+        and current["close"] > current["open"]
+        and current["open"] <= previous["close"]
+        and current["close"] >= previous["open"]
+    )
 
-            if h < max(o, c) or l > min(o, c) or h < l:
-                continue
+    bearish_engulfing = (
+        previous["close"] > previous["open"]
+        and current["close"] < current["open"]
+        and current["open"] >= previous["close"]
+        and current["close"] <= previous["open"]
+    )
 
-            clean.append(item)
+    lower_wick = min(current["open"], current["close"]) - current["low"]
+    upper_wick = current["high"] - max(
+        current["open"], current["close"]
+    )
 
-        except (KeyError, TypeError, ValueError):
-            continue
+    bullish_pin = (
+        lower_wick >= body * 2
+        and upper_wick <= max(body, candle_range * 0.1)
+        and current["close"] > current["open"]
+    )
 
-    return clean
+    bearish_pin = (
+        upper_wick >= body * 2
+        and lower_wick <= max(body, candle_range * 0.1)
+        and current["close"] < current["open"]
+    )
 
+    if bullish_engulfing or bullish_pin:
+        return "BULLISH", "Bullish candle pattern"
 
-def ema(values, period):
-    if len(values) < period:
-        return []
+    if bearish_engulfing or bearish_pin:
+        return "BEARISH", "Bearish candle pattern"
 
-    multiplier = 2 / (period + 1)
-    result = [None] * (period - 1)
-    current = sum(values[:period]) / period
-    result.append(current)
-
-    for value in values[period:]:
-        current = (value - current) * multiplier + current
-        result.append(current)
-
-    return result
-
-
-def calculate_rsi(closes, period=14):
-    if len(closes) <= period:
-        return None
-
-    changes = [
-        closes[i] - closes[i - 1]
-        for i in range(1, len(closes))
-    ]
-
-    gains = [max(change, 0) for change in changes]
-    losses = [max(-change, 0) for change in changes]
-
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
-
-    for i in range(period, len(gains)):
-        avg_gain = (
-            avg_gain * (period - 1) + gains[i]
-        ) / period
-        avg_loss = (
-            avg_loss * (period - 1) + losses[i]
-        ) / period
-
-    if avg_loss == 0:
-        return 100.0 if avg_gain > 0 else 50.0
-
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-
-def calculate_atr(candles, period=14):
-    if len(candles) <= period:
-        return None
-
-    true_ranges = []
-
-    for i in range(1, len(candles)):
-        current = candles[i]
-        previous_close = candles[i - 1]["close"]
-
-        true_range = max(
-            current["high"] - current["low"],
-            abs(current["high"] - previous_close),
-            abs(current["low"] - previous_close),
-        )
-        true_ranges.append(true_range)
-
-    atr = sum(true_ranges[:period]) / period
-
-    for value in true_ranges[period:]:
-        atr = ((atr * (period - 1)) + value) / period
-
-    return atr
+    return None, None
 
 
 def analyze_market(candles):
-    DIAGNOSTICS["total_checks"] += 1
+    df = prepare_candles(candles)
 
-    candles = validate_candles(candles)
-
-    if len(candles) < MIN_CANDLES:
-        DIAGNOSTICS["insufficient_history"] += 1
+    if len(df) < MIN_CANDLES:
         return {
-            "direction": None,
-            "reason": "Not enough candle history",
+            "direction": "NO SIGNAL",
+            "reason": f"Need at least {MIN_CANDLES} candles",
+            "score": 0,
         }
 
-    closes = [c["close"] for c in candles]
-    opens = [c["open"] for c in candles]
+    df = calculate_indicators(df)
+    current = df.iloc[-1]
+    previous = df.iloc[-2]
 
-    ema9 = ema(closes, 9)
-    ema21 = ema(closes, 21)
-    ema50 = ema(closes, 50)
-    ema200 = ema(closes, 200)
+    values = [
+        current["ema9"], current["ema21"],
+        current["ema50"], current["ema200"],
+        current["rsi"], current["macd"],
+        current["macd_signal"], current["support"],
+        current["resistance"], current["bb_upper"],
+        current["bb_lower"],
+    ]
 
-    rsi = calculate_rsi(closes, 14)
-    atr = calculate_atr(candles, 14)
-
-    if rsi is None or atr is None or atr <= 0:
+    if any(pd.isna(v) for v in values):
         return {
-            "direction": None,
-            "reason": "Indicator calculation unavailable",
+            "direction": "NO SIGNAL",
+            "reason": "Indicator data incomplete",
+            "score": 0,
         }
 
-    last = candles[-1]
-    previous = candles[-2]
+    pattern, pattern_reason = candle_patterns(df)
 
-    last_close = last["close"]
-    last_open = last["open"]
-    previous_close = previous["close"]
+    call_score = 0
+    put_score = 0
+    reasons = []
 
-    e9 = ema9[-1]
-    e21 = ema21[-1]
-    e50 = ema50[-1]
-    e200 = ema200[-1]
+    # EMA trend
+    if current["ema9"] > current["ema21"] > current["ema50"] > current["ema200"]:
+        call_score += 1
+        reasons.append("Bullish EMA trend")
+    elif current["ema9"] < current["ema21"] < current["ema50"] < current["ema200"]:
+        put_score += 1
+        reasons.append("Bearish EMA trend")
 
-    previous_e9 = ema9[-2]
-    previous_e21 = ema21[-2]
-    previous_e50 = ema50[-2]
+    # RSI
+    if 50 < current["rsi"] < 70:
+        call_score += 1
+        reasons.append("RSI bullish")
+    elif 30 < current["rsi"] < 50:
+        put_score += 1
+        reasons.append("RSI bearish")
 
-    candle_range = last["high"] - last["low"]
-    body = abs(last_close - last_open)
+    # MACD
+    if current["macd"] > current["macd_signal"]:
+        call_score += 1
+        reasons.append("MACD bullish")
+    elif current["macd"] < current["macd_signal"]:
+        put_score += 1
+        reasons.append("MACD bearish")
 
-    if candle_range <= 0:
-        DIAGNOSTICS["no_signal"] += 1
-        return {
-            "direction": None,
-            "reason": "Invalid candle range",
-        }
+    # Bollinger Bands
+    if current["close"] > current["bb_middle"]:
+        call_score += 1
+        reasons.append("Price above BB middle")
+    elif current["close"] < current["bb_middle"]:
+        put_score += 1
+        reasons.append("Price below BB middle")
 
-    body_strength = body / candle_range
+    # Support and resistance
+    if current["close"] <= current["support"] * 1.001:
+        call_score += 1
+        reasons.append("Near support")
+    if current["close"] >= current["resistance"] * 0.999:
+        put_score += 1
+        reasons.append("Near resistance")
 
-    # Trend direction and EMA slope
-    bullish_trend = (
-        last_close > e200
-        and e50 > e200
-        and e9 > e21
-        and e21 > previous_e21
-        and e50 >= previous_e50
-    )
+    # Candlestick confirmation
+    if pattern == "BULLISH":
+        call_score += 1
+        reasons.append(pattern_reason)
+    elif pattern == "BEARISH":
+        put_score += 1
+        reasons.append(pattern_reason)
 
-    bearish_trend = (
-        last_close < e200
-        and e50 < e200
-        and e9 < e21
-        and e21 < previous_e21
-        and e50 <= previous_e50
-    )
-
-    bullish_candle = (
-        last_close > last_open
-        and body_strength >= 0.55
-    )
-
-    bearish_candle = (
-        last_close < last_open
-        and body_strength >= 0.55
-    )
-
-    bullish_momentum = (
-        last_close > previous_close
-        and e9 > previous_e9
-    )
-
-    bearish_momentum = (
-        last_close < previous_close
-        and e9 < previous_e9
-    )
-
-    # Avoid extreme RSI entries and very small candle ranges
-    call_rsi = 52 <= rsi <= 66
-    put_rsi = 34 <= rsi <= 48
-
-    volatility_ok = candle_range >= atr * 0.35
-
-    if bullish_trend:
-        DIAGNOSTICS["call_trend_pass"] += 1
-
-    if bearish_trend:
-        DIAGNOSTICS["put_trend_pass"] += 1
-
-    if bullish_candle:
-        DIAGNOSTICS["call_candle_pass"] += 1
-
-    if bearish_candle:
-        DIAGNOSTICS["put_candle_pass"] += 1
-
-    if bullish_momentum:
-        DIAGNOSTICS["call_momentum_pass"] += 1
-
-    if bearish_momentum:
-        DIAGNOSTICS["put_momentum_pass"] += 1
-
-    if call_rsi:
-        DIAGNOSTICS["call_rsi_pass"] += 1
-
-    if put_rsi:
-        DIAGNOSTICS["put_rsi_pass"] += 1
-
-    common = {
-        "rsi": round(rsi, 2),
-        "ema9": round(e9, 6),
-        "ema21": round(e21, 6),
-        "ema50": round(e50, 6),
-        "ema200": round(e200, 6),
-    }
-
-    if (
-        bullish_trend
-        and bullish_candle
-        and bullish_momentum
-        and call_rsi
-        and volatility_ok
-    ):
-        DIAGNOSTICS["call_signals"] += 1
-        return {
-            "direction": "CALL",
-            "reason": "Bullish trend, EMA slope, strong candle, momentum and RSI confirmed",
-            **common,
-        }
-
-    if (
-        bearish_trend
-        and bearish_candle
-        and bearish_momentum
-        and put_rsi
-        and volatility_ok
-    ):
-        DIAGNOSTICS["put_signals"] += 1
-        return {
-            "direction": "PUT",
-            "reason": "Bearish trend, EMA slope, strong candle, momentum and RSI confirmed",
-            **common,
-        }
-
-    DIAGNOSTICS["no_signal"] += 1
+    if call_score >= MIN_SCORE and call_score > put_score:
+        direction = "CALL"
+        score = call_score
+    elif put_score >= MIN_SCORE and put_score > call_score:
+        direction = "PUT"
+        score = put_score
+    else:
+        direction = "NO SIGNAL"
+        score = max(call_score, put_score)
 
     return {
-        "direction": None,
-        "reason": "No clear setup or volatility filter failed",
-        **common,
+        "direction": direction,
+        "score": score,
+        "call_score": call_score,
+        "put_score": put_score,
+        "rsi": round(float(current["rsi"]), 2),
+        "ema9": round(float(current["ema9"]), 6),
+        "ema21": round(float(current["ema21"]), 6),
+        "ema50": round(float(current["ema50"]), 6),
+        "ema200": round(float(current["ema200"]), 6),
+        "support": float(current["support"]),
+        "resistance": float(current["resistance"]),
+        "reasons": reasons,
     }
-
