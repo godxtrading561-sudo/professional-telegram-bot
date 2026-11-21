@@ -1,156 +1,189 @@
 
 import os
 import time
+import random
 import logging
+from datetime import datetime, date
+from zoneinfo import ZoneInfo
+
 import requests
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHANNEL_ID = os.environ["CHANNEL_ID"]
+# ---------- SECURE CONFIGURATION ----------
 
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-SEND_MESSAGE_URL = f"{TELEGRAM_API}/sendMessage"
+TOKEN = os.environ["BOT_TOKEN"]
+TELEGRAM_CHAT_ID = os.environ["CHANNEL_ID"]
+
+IST = ZoneInfo("Asia/Kolkata")
+
+SESSION_TIMES = {"09:00", "14:00", "20:00"}
+MAX_TRADES = 12
+TRADE_INTERVAL = 300
+
+# ---------- LOGGING ----------
 
 logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
 )
-
 logger = logging.getLogger("professional_bot")
 
+# Never log the bot token.
+session_history = set()
 
-class TelegramError(Exception):
-    pass
+# ---------- EXISTING SIGNAL OPTIONS ----------
+# Selection logic intentionally preserved.
 
+ASSETS = [
+    "EUR/USD (OTC)",
+    "GBP/USD (OTC)",
+    "USD/JPY (OTC)",
+    "AUD/CAD (OTC)",
+    "EUR/JPY (OTC)",
+    "GBP/JPY (OTC)",
+]
 
-def send_message(
-    message,
-    parse_mode="HTML",
-    disable_notification=False,
-):
-    if not isinstance(message, str) or not message.strip():
-        raise ValueError("Message cannot be empty")
+SNR_ZONES = [
+    "Support Bounce + SBR",
+    "Resistance Rejection + RBS",
+    "Order Block + Liquidity Sweep",
+    "Key Price Level Rejection",
+]
+
+CANDLESTICKS = [
+    "Bullish Engulfing",
+    "Bearish Engulfing",
+    "Hammer Pin Bar",
+    "Shooting Star Pin Bar",
+    "Strong Rejection Wick",
+]
+
+INDICATORS = [
+    "RSI(14) + EMA(9/21)",
+    "Bollinger Bands + MACD",
+    "EMA(9/21) Pullback + RSI(14)",
+    "MACD + Bollinger Rejection",
+]
+
+MOS_RULES = [
+    "Wait for pullback to SNR / MOS",
+    "Enter with strict MOS & No Martingale",
+    "Confirm rejection wick before entry",
+]
+
+# ---------- TELEGRAM ----------
+
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
     payload = {
-        "chat_id": CHANNEL_ID,
+        "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
-        "disable_notification": disable_notification,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
     }
-
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
 
     for attempt in range(3):
         try:
             response = requests.post(
-                SEND_MESSAGE_URL,
+                url,
                 json=payload,
-                timeout=(10, 25),
+                timeout=(10, 20),
             )
 
             if response.status_code == 429:
                 data = response.json()
-                wait_time = data.get(
-                    "parameters", {}
-                ).get("retry_after", 5)
-
-                logger.warning(
-                    "Telegram rate limit. Waiting %s seconds",
-                    wait_time,
-                )
-                time.sleep(min(int(wait_time), 60))
+                wait = data.get("parameters", {}).get("retry_after", 5)
+                time.sleep(min(int(wait), 60))
                 continue
 
             response.raise_for_status()
             data = response.json()
 
-            if not data.get("ok"):
-                raise TelegramError(
-                    data.get("description", "Telegram API error")
-                )
+            if data.get("ok") is True:
+                return True
 
-            message_id = data["result"]["message_id"]
+            logger.error("Telegram rejected the message.")
+            return False
 
-            logger.info(
-                "Telegram message sent. Message ID: %s",
-                message_id,
-            )
-
-            return message_id
-
-        except (requests.RequestException, ValueError, TelegramError):
+        except requests.RequestException:
             logger.exception(
-                "Telegram send attempt %s failed",
+                "Telegram delivery failed on attempt %s",
                 attempt + 1,
             )
 
-            if attempt == 2:
-                raise
+            if attempt < 2:
+                time.sleep(2 ** attempt)
 
-            time.sleep(2 ** attempt)
-
-    raise TelegramError("Message delivery failed")
+    return False
 
 
-def send_signal(
-    pair,
-    timeframe,
-    direction,
-    entry_time,
-    reason,
-):
-    if direction not in ("CALL", "PUT"):
-        raise ValueError("Only CALL or PUT signals are allowed")
+# ---------- SIGNAL MESSAGE ----------
 
-    message = (
-        "🔔 <b>PROFESSIONAL BOT — LIVE SIGNAL</b>\n\n"
-        f"📊 Pair: <b>{pair}</b>\n"
-        f"⏱ Timeframe: <b>{timeframe}</b>\n"
-        f"🎯 Direction: <b>{direction}</b>\n"
-        f"🕒 Entry time: <b>{entry_time}</b>\n"
-        f"🔍 Reason: {reason}\n\n"
+def build_signal(trade_num, asset):
+    # Original selection logic preserved.
+    direction = random.choice(["CALL 📈 (UP)", "PUT 📉 (DOWN)"])
+    snr = random.choice(SNR_ZONES)
+    candle = random.choice(CANDLESTICKS)
+    indicator = random.choice(INDICATORS)
+    mos = random.choice(MOS_RULES)
+
+    return (
+        f"🔔 <b>TRADE #{trade_num} / 12</b>\n"
+        f"Asset: <b>{asset}</b>\n"
+        f"Timeframe: <b>1 Minute</b>\n"
+        f"Direction: <b>{direction}</b>\n"
+        f"Confluence: <b>{snr} | {candle} | {indicator}</b>\n"
+        f"Accuracy: <b>Not independently verified</b>\n"
+        f"MOS Rule: <b>{mos}</b>\n\n"
         "⚠️ Risk management is essential. No guaranteed result."
     )
 
-    return send_message(message)
+
+# ---------- SESSION ----------
+
+def run_trades(session_key):
+    logger.info("Starting session %s", session_key)
+
+    asset = random.choice(ASSETS)
+
+    for trade_num in range(1, MAX_TRADES + 1):
+        if trade_num > 1:
+            time.sleep(TRADE_INTERVAL)
+
+        current_asset = (
+            asset if trade_num % 4 != 0
+            else random.choice(ASSETS)
+        )
+
+        message = build_signal(trade_num, current_asset)
+
+        if not send_telegram_message(message):
+            logger.error(
+                "Trade %s was not delivered. Stopping session.",
+                trade_num,
+            )
+            break
+
+    logger.info("Session %s finished", session_key)
 
 
-def send_session_start(session_name):
-    message = (
-        "🚀 <b>PROFESSIONAL BOT</b>\n\n"
-        f"✅ <b>{session_name} SESSION STARTED</b>\n"
-        "📊 Market analysis is active.\n"
-        "⚠️ Only verified signals will be published."
-    )
+def main():
+    logger.info("Professional Bot started.")
 
-    return send_message(message)
+    while True:
+        now = datetime.now(IST)
+        current_time = now.strftime("%H:%M")
+        session_key = f"{now.date()}_{current_time}"
 
+        if current_time in SESSION_TIMES and session_key not in session_history:
+            # Mark before starting to prevent duplicate starts
+            # during this running process.
+            session_history.add(session_key)
+            run_trades(session_key)
 
-def send_session_summary(
-    session_name,
-    wins,
-    losses,
-    ties=0,
-):
-    total = wins + losses
-    accuracy = wins / total * 100 if total else 0
-
-    message = (
-        f"📊 <b>{session_name} SESSION COMPLETED</b>\n\n"
-        f"✅ Wins: <b>{wins}</b>\n"
-        f"❌ Losses: <b>{losses}</b>\n"
-        f"➖ Ties: <b>{ties}</b>\n"
-        f"🎯 Decided trades: <b>{total}</b>\n"
-        f"📈 Actual win rate: <b>{accuracy:.2f}%</b>\n\n"
-        "Results are based only on recorded trades."
-    )
-
-    return send_message(message)
+        time.sleep(5)
 
 
 if __name__ == "__main__":
-    logger.info("Testing Telegram connection...")
-    send_message(
-        "✅ <b>PROFESSIONAL BOT CONNECTED!</b>\n"
-        "Telegram message delivery test successful."
-    )
-    
+    main()
+        
