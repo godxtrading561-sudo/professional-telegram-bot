@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       task:
-        description: "Choose what to run"
+        description: "Choose task"
         required: true
         type: choice
         options:
@@ -23,15 +23,20 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Get repository code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-      - name: Install requirements
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Install Python requirements
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -39,7 +44,7 @@ jobs:
       - name: Run backtest
         run: python backtest.py
 
-      - name: Upload reports
+      - name: Upload unseen reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -55,23 +60,20 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Get repository code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-      - name: Install requirements
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+      - name: Install requests
+        run: pip install "requests>=2.31,<3"
 
       - name: Test Telegram connection
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
         run: |
-          python -c "import os, requests; t=os.environ['BOT_TOKEN']; c=os.environ['CHANNEL_ID']; r=requests.post('https://api.telegram.org/bot'+t+'/sendMessage', json={'chat_id':c,'text':'PROFESSIONAL BOT — CONNECTION TEST SUCCESSFUL'}, timeout=20); r.raise_for_status(); assert r.json().get('ok'), r.text; print('Telegram connection successful')"
-
+          python -c "import os,requests; u='https://api.telegram.org/bot'+os.environ['BOT_TOKEN']+'/sendMessage'; r=requests.post(u,json={'chat_id':os.environ['CHANNEL_ID'],'text':'PROFESSIONAL BOT — CONNECTION TEST SUCCESSFUL'},timeout=20); r.raise_for_status(); d=r.json(); assert d.get('ok'), d; print('Telegram connection successful')"
