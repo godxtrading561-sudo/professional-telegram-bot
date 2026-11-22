@@ -22,6 +22,8 @@ SESSION_TIMES = ["09:00", "12:00", "14:00", "18:00", "23:00"]
 MAX_SIGNALS = 12
 SIGNAL_GAP_SECONDS = 300
 RECHECK_SECONDS = 30
+MAX_SESSION_MINUTES = 75
+MIN_STRONG_SCORE = 5
 
 PAIRS = [
     ("EURUSD=X", "EUR/USD"),
@@ -77,98 +79,28 @@ def fetch_closed_candles(ticker):
 
 
 def best_signal():
+    best_pair = None
+    best_setup = None
+
     for ticker, label in PAIRS:
         try:
             candles = fetch_closed_candles(ticker)
             if candles is None:
                 continue
             setup = analyze_market(candles)
-            if setup:
-                return label, setup
+            if not setup:
+                continue
+            score = int(setup.get("score", 0))
+            if score < MIN_STRONG_SCORE:
+                continue
+            if best_setup is None or score > int(best_setup.get("score", 0)):
+                best_pair = label
+                best_setup = setup
         except Exception:
             log.exception("Analysis failed for %s", ticker)
-    return None, None
+
+    return best_pair, best_setup
 
 
 def seconds_until_pre_alert():
     now = datetime.now(TZ)
-    target = now.replace(second=45, microsecond=0)
-    if now >= target:
-        target += timedelta(minutes=1)
-    return max(0, (target - now).total_seconds())
-
-
-def wait_for_pre_alert_slot():
-    delay = seconds_until_pre_alert()
-    if delay:
-        time.sleep(delay)
-
-
-def run_session(session_label):
-    sent_count = 0
-    last_signal_slot = None
-
-    log.info("Session %s started (only trade signals).", session_label)
-
-    while sent_count < MAX_SIGNALS:
-        wait_for_pre_alert_slot()
-        slot = datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
-        if slot == last_signal_slot:
-            time.sleep(1)
-            continue
-
-        label, setup = best_signal()
-        if not setup:
-            log.info("No valid setup in pre-alert slot %s.", slot)
-            time.sleep(RECHECK_SECONDS)
-            continue
-
-        next_candle_time = (
-            datetime.now(TZ).replace(second=0, microsecond=0)
-            + timedelta(minutes=1)
-        )
-        message = (
-            f"⏳ <b>PRE-ALERT — TRADE #{sent_count + 1}/{MAX_SIGNALS}</b>\n"
-            f"Asset: <b>{label}</b>\n"
-            f"Timeframe: <b>1 Minute</b>\n"
-            f"Direction: <b>{setup['direction']}</b>\n"
-            f"Confluence: <b>{setup['score']}/6</b>\n"
-            f"Reasons: {' + '.join(setup['reasons'])}\n"
-            f"Planned entry candle: "
-            f"<b>{next_candle_time.strftime('%H:%M:%S')} IST</b>"
-        )
-
-        if telegram(message):
-            sent_count += 1
-            last_signal_slot = slot
-            log.info("Trade %d/%d sent for %s.", sent_count, MAX_SIGNALS, label)
-            if sent_count >= MAX_SIGNALS:
-                break
-            time.sleep(SIGNAL_GAP_SECONDS)
-        else:
-            log.warning("Telegram send failed; retrying next pre-alert slot.")
-            time.sleep(RECHECK_SECONDS)
-
-    log.info("Session %s finished after %d signals.", session_label, sent_count)
-
-
-def main():
-    if not BOT_TOKEN or not CHANNEL_ID:
-        raise RuntimeError("Missing BOT_TOKEN or CHANNEL_ID secrets.")
-
-    now = datetime.now(TZ)
-    current = now.strftime("%H:%M")
-
-    if FORCE_SESSION:
-        run_session(f"MANUAL ({current} IST)")
-        return
-
-    if current not in SESSION_TIMES:
-        log.info("Not a configured session start (%s IST); exiting.", current)
-        return
-
-    run_session(f"{current} IST")
-
-
-if __name__ == "__main__":
-    main()
