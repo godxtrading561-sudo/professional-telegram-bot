@@ -31,6 +31,7 @@ PAIRS = [
     ("GBPJPY=X", "GBP/JPY"),
 ]
 
+
 def telegram(text):
     if not BOT_TOKEN or not CHANNEL_ID:
         raise RuntimeError("Set BOT_TOKEN and CHANNEL_ID in GitHub Secrets.")
@@ -48,6 +49,7 @@ def telegram(text):
     except requests.RequestException as e:
         log.error("Telegram request failed: %s", e)
     return False
+
 
 def fetch_closed_candles(ticker):
     df = yf.download(
@@ -72,6 +74,7 @@ def fetch_closed_candles(ticker):
     df = df.rename(columns={df.columns[0]: "timestamp"})
     return df
 
+
 def best_signal():
     for ticker, label in PAIRS:
         try:
@@ -85,6 +88,7 @@ def best_signal():
             log.exception("Analysis failed for %s", ticker)
     return None, None
 
+
 def seconds_until_pre_alert():
     now = datetime.now(TZ)
     target = now.replace(second=45, microsecond=0)
@@ -92,21 +96,18 @@ def seconds_until_pre_alert():
         target += timedelta(minutes=1)
     return max(0, (target - now).total_seconds())
 
+
 def wait_for_pre_alert_slot():
     delay = seconds_until_pre_alert()
     if delay:
         time.sleep(delay)
 
+
 def run_session(session_time):
     sent_count = 0
     last_signal_slot = None
 
-    log.info("Session %s started.", session_time)
-    telegram(
-        f"🟢 <b>SESSION STARTED</b>\n"
-        f"Session: <b>{session_time} IST</b>\n"
-        "Signals will be sent about 15 seconds before the next 1-minute candle."
-    )
+    log.info("Session %s started (only trade signals).", session_time)
 
     while sent_count < MAX_SIGNALS:
         wait_for_pre_alert_slot()
@@ -126,21 +127,20 @@ def run_session(session_time):
             + timedelta(minutes=1)
         )
         message = (
-            f"⏳ <b>PRE-ALERT — TRADE #{sent_count + 1}/12</b>\n"
+            f"⏳ <b>PRE-ALERT — TRADE #{sent_count + 1}/{MAX_SIGNALS}</b>\n"
             f"Asset: <b>{label}</b>\n"
             f"Timeframe: <b>1 Minute</b>\n"
             f"Direction: <b>{setup['direction']}</b>\n"
-            f"Confluence: <b>{setup['score']}/5</b>\n"
+            f"Confluence: <b>{setup['score']}/6</b>\n"
             f"Reasons: {' + '.join(setup['reasons'])}\n"
             f"Planned entry candle: "
-            f"<b>{next_candle_time.strftime('%H:%M:%S')} IST</b>\n"
-            "⚠️ Pre-alert target is approximate; feed/network delays may affect timing."
+            f"<b>{next_candle_time.strftime('%H:%M:%S')} IST</b>"
         )
 
         if telegram(message):
             sent_count += 1
             last_signal_slot = slot
-            log.info("Pre-alert %d/%d sent for %s.", sent_count, MAX_SIGNALS, label)
+            log.info("Trade %d/%d sent for %s.", sent_count, MAX_SIGNALS, label)
             if sent_count >= MAX_SIGNALS:
                 break
             time.sleep(SIGNAL_GAP_SECONDS)
@@ -148,12 +148,8 @@ def run_session(session_time):
             log.warning("Telegram send failed; retrying next pre-alert slot.")
             time.sleep(RECHECK_SECONDS)
 
-    telegram(
-        "🔒 <b>SESSION CLOSED</b>\n"
-        "✅ All 12 signals were successfully sent.\n"
-        "No further signals will be sent in this session."
-    )
-    log.info("Session %s closed after 12 successful sends.", session_time)
+    log.info("Session %s finished after %d signals.", session_time, sent_count)
+
 
 def main():
     if not BOT_TOKEN or not CHANNEL_ID:
@@ -165,6 +161,7 @@ def main():
         log.info("Not a configured session start (%s IST); exiting.", current)
         return
     run_session(current)
+
 
 if __name__ == "__main__":
     main()
