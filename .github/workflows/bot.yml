@@ -51,11 +51,20 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'backtest'
         run: python backtest.py
 
-      - name: Run scheduled session
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.task == 'run_session')
+      - name: Run manual session
+        if: github.event_name == 'workflow_dispatch' && inputs.task == 'run_session'
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          FORCE_SESSION: "1"
+        run: python bot.py
+
+      - name: Run scheduled session
+        if: github.event_name == 'schedule'
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          FORCE_SESSION: "0"
         run: python bot.py
 
       - name: Upload backtest report
