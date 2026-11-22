@@ -1,25 +1,25 @@
 import os
 import glob
 import pandas as pd
+
 from signal_engine import analyze_market, prepare_candles
 
 DATA_DIR = "data"
+
 
 def backtest_file(path):
     df = prepare_candles(pd.read_csv(path))
     rows = []
 
-    # Signal uses candle i after it has closed.
-    # Alert is modelled at 45 seconds into candle i+1.
-    # Entry is at the open of candle i+2 (about 15 sec after alert).
-    # Exit is at the close of candle i+2, a one-candle expiry.
     for i in range(100, len(df) - 2):
         signal = analyze_market(df.iloc[:i + 1].copy())
+
         if not signal:
             continue
 
         alert_candle = df.iloc[i + 1]
         entry_candle = df.iloc[i + 2]
+
         entry = float(entry_candle["open"])
         exit_price = float(entry_candle["close"])
 
@@ -41,14 +41,20 @@ def backtest_file(path):
             "outcome": outcome,
             "reasons": " | ".join(signal["reasons"])
         })
+
     return rows
+
 
 def main():
     paths = sorted(glob.glob(os.path.join(DATA_DIR, "*.csv")))
+
     if not paths:
-        raise SystemExit("No CSV files in data/. Expected timestamp,open,high,low,close.")
+        raise SystemExit(
+            "No CSV files in data/. Expected timestamp,open,high,low,close."
+        )
 
     trades = []
+
     for path in paths:
         print(f"Testing {path}")
         trades.extend(backtest_file(path))
@@ -64,18 +70,21 @@ def main():
     wins = int((decisive.outcome == "WIN").sum())
     losses = int((decisive.outcome == "LOSS").sum())
     ties = int((result.outcome == "TIE").sum())
+
     accuracy = wins / len(decisive) * 100 if len(decisive) else 0
 
     print("\n===== BACKTEST SUMMARY =====")
     print(f"Total signals: {len(result)}")
     print(f"Wins: {wins} | Losses: {losses} | Ties: {ties}")
     print(f"Accuracy excluding ties: {accuracy:.2f}%")
+
     for direction, group in result.groupby("signal"):
         g = group[group.outcome != "TIE"]
         w = int((g.outcome == "WIN").sum())
         l = int((g.outcome == "LOSS").sum())
         acc = w / len(g) * 100 if len(g) else 0
         print(f"{direction}: {acc:.2f}% ({w} wins / {l} losses)")
+
 
 if __name__ == "__main__":
     main()
