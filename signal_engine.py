@@ -13,7 +13,6 @@ PAIRS = [
 
 TIMEFRAME = "1 Minute"
 MIN_CANDLES = 220
-MIN_SCORE = 4
 
 
 def prepare_candles(candles):
@@ -25,7 +24,7 @@ def prepare_candles(candles):
             raise ValueError(f"Missing candle column: {col}")
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df = df.dropna(subset=required).reset_index(drop=True)
+    df = df.dropna(subset=required)
 
     df = df[
         (df["high"] >= df["low"]) &
@@ -33,7 +32,10 @@ def prepare_candles(candles):
         (df["high"] >= df["close"]) &
         (df["low"] <= df["open"]) &
         (df["low"] <= df["close"])
-    ].copy()
+    ]
+
+    if "timestamp" in df.columns:
+        df = df.sort_values("timestamp")
 
     return df.reset_index(drop=True)
 
@@ -45,10 +47,10 @@ def calculate_indicators(df):
     high = df["high"]
     low = df["low"]
 
-    df["ema9"] = close.ewm(span=9, adjust=False).mean()
-    df["ema21"] = close.ewm(span=21, adjust=False).mean()
-    df["ema50"] = close.ewm(span=50, adjust=False).mean()
-    df["ema200"] = close.ewm(span=200, adjust=False).mean()
+    for period in [9, 21, 50, 200]:
+        df[f"ema{period}"] = close.ewm(
+            span=period, adjust=False
+        ).mean()
 
     delta = close.diff()
     gain = delta.clip(lower=0)
@@ -59,14 +61,15 @@ def calculate_indicators(df):
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
     df["rsi"] = 100 - (100 / (1 + rs))
+    df.loc[avg_loss == 0, "rsi"] = 100
     df["rsi"] = df["rsi"].fillna(50)
 
     middle = close.rolling(20).mean()
     std = close.rolling(20).std()
 
-    df["bb_upper"] = middle + (2 * std)
-    df["bb_lower"] = middle - (2 * std)
     df["bb_middle"] = middle
+    df["bb_upper"] = middle + 2 * std
+    df["bb_lower"] = middle - 2 * std
 
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
@@ -75,6 +78,16 @@ def calculate_indicators(df):
     df["macd_signal"] = df["macd"].ewm(
         span=9, adjust=False
     ).mean()
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
+
+    previous_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - previous_close).abs(),
+        (low - previous_close).abs()
+    ], axis=1).max(axis=1)
+
+    df["atr"] = tr.rolling(14).mean()
 
     df["support"] = low.rolling(20).min().shift(1)
     df["resistance"] = high.rolling(20).max().shift(1)
@@ -90,7 +103,15 @@ def candle_patterns(df):
     candle_range = current["high"] - current["low"]
 
     if candle_range <= 0:
-        return None, None
+        return None
+
+    lower_wick = min(
+        current["open"], current["close"]
+    ) - current["low"]
+
+    upper_wick = current["high"] - max(
+        current["open"], current["close"]
+    )
 
     bullish_engulfing = (
         previous["close"] < previous["open"]
@@ -106,30 +127,23 @@ def candle_patterns(df):
         and current["close"] <= previous["open"]
     )
 
-    lower_wick = min(current["open"], current["close"]) - current["low"]
-    upper_wick = current["high"] - max(
-        current["open"], current["close"]
-    )
-
     bullish_pin = (
-        lower_wick >= body * 2
-        and upper_wick <= max(body, candle_range * 0.1)
+        lower_wick >= max(body * 2, candle_range * 0.35)
         and current["close"] > current["open"]
     )
 
     bearish_pin = (
-        upper_wick >= body * 2
-        and lower_wick <= max(body, candle_range * 0.1)
+        upper_wick >= max(body * 2, candle_range * 0.35)
         and current["close"] < current["open"]
     )
 
     if bullish_engulfing or bullish_pin:
-        return "BULLISH", "Bullish candle pattern"
+        return "BULLISH"
 
     if bearish_engulfing or bearish_pin:
-        return "BEARISH", "Bearish candle pattern"
+        return "BEARISH"
 
-    return None, None
+    return None
 
 
 def analyze_market(candles):
@@ -138,93 +152,176 @@ def analyze_market(candles):
     if len(df) < MIN_CANDLES:
         return {
             "direction": "NO SIGNAL",
-            "reason": f"Need at least {MIN_CANDLES} candles",
-            "score": 0,
+            "reason": "Not enough candles",
+            "score": 0
         }
 
     df = calculate_indicators(df)
+
     current = df.iloc[-1]
     previous = df.iloc[-2]
 
-    values = [
+    required_values = [
         current["ema9"], current["ema21"],
         current["ema50"], current["ema200"],
-        current["rsi"], current["macd"],
-        current["macd_signal"], current["support"],
-        current["resistance"], current["bb_upper"],
-        current["bb_lower"],
+        current["rsi"], current["macd_hist"],
+        current["bb_middle"], current["support"],
+        current["resistance"], current["atr"]
     ]
 
-    if any(pd.isna(v) for v in values):
+    if any(pd.isna(value) for value in required_values):
         return {
             "direction": "NO SIGNAL",
             "reason": "Indicator data incomplete",
-            "score": 0,
+            "score": 0
         }
 
-    pattern, pattern_reason = candle_patterns(df)
+    pattern = candle_patterns(df)
+
+    close = float(current["close"])
+    atr = float(current["atr"])
+
+    if atr <= 0:
+        return {
+            "direction": "NO SIGNAL",
+            "reason": "Invalid volatility",
+            "score": 0
+        }
+
+    # Strong trend confirmation
+    bullish_trend = (
+        current["ema9"] > current["ema21"]
+        and current["ema21"] > current["ema50"]
+        and current["ema50"] > current["ema200"]
+        and close > current["ema50"]
+    )
+
+    bearish_trend = (
+        current["ema9"] < current["ema21"]
+        and current["ema21"] < current["ema50"]
+        and current["ema50"] < current["ema200"]
+        and close < current["ema50"]
+    )
+
+    # RSI momentum confirmation
+    bullish_rsi = 52 <= current["rsi"] <= 68
+    bearish_rsi = 32 <= current["rsi"] <= 48
+
+    # MACD momentum confirmation
+    bullish_macd = (
+        current["macd_hist"] > 0
+        and current["macd_hist"] > previous["macd_hist"]
+    )
+
+    bearish_macd = (
+        current["macd_hist"] < 0
+        and current["macd_hist"] < previous["macd_hist"]
+    )
+
+    # Bollinger confirmation
+    bullish_bb = close > current["bb_middle"]
+    bearish_bb = close < current["bb_middle"]
+
+    # Support/resistance rejection
+    near_support = (
+        current["low"] <= current["support"] + atr * 0.25
+        and close > current["support"]
+    )
+
+    near_resistance = (
+        current["high"] >= current["resistance"] - atr * 0.25
+        and close < current["resistance"]
+    )
+
+    # Avoid unusually large candles
+    candle_range = current["high"] - current["low"]
+    normal_candle = candle_range <= atr * 1.8
 
     call_score = 0
     put_score = 0
     reasons = []
 
-    # EMA trend
-    if current["ema9"] > current["ema21"] > current["ema50"] > current["ema200"]:
+    if bullish_trend:
         call_score += 1
         reasons.append("Bullish EMA trend")
-    elif current["ema9"] < current["ema21"] < current["ema50"] < current["ema200"]:
+
+    if bearish_trend:
         put_score += 1
         reasons.append("Bearish EMA trend")
 
-    # RSI
-    if 50 < current["rsi"] < 70:
+    if bullish_rsi:
         call_score += 1
-        reasons.append("RSI bullish")
-    elif 30 < current["rsi"] < 50:
-        put_score += 1
-        reasons.append("RSI bearish")
+        reasons.append("Bullish RSI")
 
-    # MACD
-    if current["macd"] > current["macd_signal"]:
+    if bearish_rsi:
+        put_score += 1
+        reasons.append("Bearish RSI")
+
+    if bullish_macd:
         call_score += 1
-        reasons.append("MACD bullish")
-    elif current["macd"] < current["macd_signal"]:
-        put_score += 1
-        reasons.append("MACD bearish")
+        reasons.append("Bullish MACD momentum")
 
-    # Bollinger Bands
-    if current["close"] > current["bb_middle"]:
+    if bearish_macd:
+        put_score += 1
+        reasons.append("Bearish MACD momentum")
+
+    if bullish_bb:
         call_score += 1
         reasons.append("Price above BB middle")
-    elif current["close"] < current["bb_middle"]:
+
+    if bearish_bb:
         put_score += 1
         reasons.append("Price below BB middle")
 
-    # Support and resistance
-    if current["close"] <= current["support"] * 1.001:
-        call_score += 1
-        reasons.append("Near support")
-    if current["close"] >= current["resistance"] * 0.999:
-        put_score += 1
-        reasons.append("Near resistance")
-
-    # Candlestick confirmation
     if pattern == "BULLISH":
         call_score += 1
-        reasons.append(pattern_reason)
-    elif pattern == "BEARISH":
-        put_score += 1
-        reasons.append(pattern_reason)
+        reasons.append("Bullish candle pattern")
 
-    if call_score >= MIN_SCORE and call_score > put_score:
-        direction = "CALL"
-        score = call_score
-    elif put_score >= MIN_SCORE and put_score > call_score:
-        direction = "PUT"
-        score = put_score
+    if pattern == "BEARISH":
+        put_score += 1
+        reasons.append("Bearish candle pattern")
+
+    if near_support:
+        call_score += 1
+        reasons.append("Support rejection")
+
+    if near_resistance:
+        put_score += 1
+        reasons.append("Resistance rejection")
+
+    # Strict trend lock: opposite-trend signals are blocked.
+    if bullish_trend:
+        if (
+            call_score >= 5
+            and bullish_rsi
+            and bullish_macd
+            and pattern == "BULLISH"
+            and normal_candle
+        ):
+            direction = "CALL"
+            score = call_score
+        else:
+            direction = "NO SIGNAL"
+            score = call_score
+
+    elif bearish_trend:
+        if (
+            put_score >= 5
+            and bearish_rsi
+            and bearish_macd
+            and pattern == "BEARISH"
+            and normal_candle
+        ):
+            direction = "PUT"
+            score = put_score
+        else:
+            direction = "NO SIGNAL"
+            score = put_score
+
     else:
         direction = "NO SIGNAL"
         score = max(call_score, put_score)
+        reasons.append("No confirmed EMA trend")
 
     return {
         "direction": direction,
@@ -238,5 +335,5 @@ def analyze_market(candles):
         "ema200": round(float(current["ema200"]), 6),
         "support": float(current["support"]),
         "resistance": float(current["resistance"]),
-        "reasons": reasons,
+        "reasons": reasons
     }
