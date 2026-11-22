@@ -15,6 +15,7 @@ log = logging.getLogger("professional-bot")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+FORCE_SESSION = os.getenv("FORCE_SESSION", "0") == "1"
 TZ = ZoneInfo("Asia/Kolkata")
 
 SESSION_TIMES = ["09:00", "12:00", "14:00", "18:00", "23:00"]
@@ -103,11 +104,11 @@ def wait_for_pre_alert_slot():
         time.sleep(delay)
 
 
-def run_session(session_time):
+def run_session(session_label):
     sent_count = 0
     last_signal_slot = None
 
-    log.info("Session %s started (only trade signals).", session_time)
+    log.info("Session %s started (only trade signals).", session_label)
 
     while sent_count < MAX_SIGNALS:
         wait_for_pre_alert_slot()
@@ -148,7 +149,7 @@ def run_session(session_time):
             log.warning("Telegram send failed; retrying next pre-alert slot.")
             time.sleep(RECHECK_SECONDS)
 
-    log.info("Session %s finished after %d signals.", session_time, sent_count)
+    log.info("Session %s finished after %d signals.", session_label, sent_count)
 
 
 def main():
@@ -157,10 +158,16 @@ def main():
 
     now = datetime.now(TZ)
     current = now.strftime("%H:%M")
+
+    if FORCE_SESSION:
+        run_session(f"MANUAL ({current} IST)")
+        return
+
     if current not in SESSION_TIMES:
         log.info("Not a configured session start (%s IST); exiting.", current)
         return
-    run_session(current)
+
+    run_session(f"{current} IST")
 
 
 if __name__ == "__main__":
