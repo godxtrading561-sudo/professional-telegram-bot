@@ -1,57 +1,46 @@
 
 import os
-import requests
+import subprocess
 import pandas as pd
 
-API_KEY = os.environ["OTCHARTS_API_KEY"]
+os.makedirs("data", exist_ok=True)
 
-PAIRS = [
-    "EURUSD_otc",
-    "GBPUSD_otc",
-    "USDJPY_otc",
-    "AUDCAD_otc",
-    "EURJPY_otc",
-    "GBPJPY_otc",
+subprocess.run([
+    "npx", "--yes", "dukascopy-node",
+    "-i", "eurusd",
+    "-from", "2026-10-01",
+    "-to", "2026-11-21",
+    "-tf", "m1",
+    "-f", "csv",
+    "-dir", "data"
+], check=True)
+
+files = [
+    f for f in os.listdir("data")
+    if f.lower().endswith(".csv")
 ]
 
-BASE_URL = "https://otcharts.com/v1/candles"
+if not files:
+    raise RuntimeError("Dukascopy did not create a CSV file")
 
-for pair in PAIRS:
-    print(f"Downloading {pair}...")
+source = os.path.join("data", files[0])
+df = pd.read_csv(source)
+df.columns = [c.lower().strip() for c in df.columns]
 
-    params = {
-        "venue": "quotex",
-        "symbol": pair,
-        "tf": 60,
-        "limit": 360,
-    }
+df = df.rename(columns={
+    "timestamp": "timestamp",
+    "date": "timestamp",
+    "datetime": "timestamp",
+    "volume": "volume"
+})
 
-    response = requests.get(
-        BASE_URL,
-        headers={"Authorization": f"Bearer {API_KEY}"},
-        params=params,
-        timeout=30,
-    )
+required = ["timestamp", "open", "high", "low", "close"]
+missing = [c for c in required if c not in df.columns]
 
-    if response.status_code != 200:
-        print(f"Failed {pair}: HTTP {response.status_code}")
-        continue
+if missing:
+    raise ValueError(f"Missing columns: {missing}. Found: {list(df.columns)}")
 
-    candles = response.json().get("candles", [])
+df = df[required].dropna()
+df.to_csv("data/EURUSD_otc.csv", index=False)
 
-    if not candles:
-        print(f"No candles returned for {pair}")
-        continue
-
-    df = pd.DataFrame(candles)
-    df = df.rename(columns={"time": "timestamp"})
-    df = df[["timestamp", "open", "high", "low", "close"]]
-    df = df.sort_values("timestamp")
-
-    os.makedirs("data", exist_ok=True)
-    df.to_csv(f"data/{pair}.csv", index=False)
-
-    print(f"Saved {len(df)} candles for {pair}")
-
-print("Download completed.")
-      
+print(f"Saved {len(df)} candles")
