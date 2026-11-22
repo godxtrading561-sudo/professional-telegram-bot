@@ -1,7 +1,9 @@
 import pandas as pd
+import numpy as np
 
 MIN_CANDLES = 100
-MIN_SCORE = 4
+MIN_SCORE = 5
+
 
 def prepare_candles(df):
     df = df.copy()
@@ -29,27 +31,49 @@ def prepare_candles(df):
     return df.dropna(subset=required).reset_index(drop=True)
 
 
+def _find_snr_levels(df, lookback=40):
+    sub = df.iloc[-lookback:-1]
+    if len(sub) < 10:
+        return float(df["low"].iloc[-20:-1].min()), float(df["high"].iloc[-20:-1].max())
+
+    highs = sub["high"].values
+    lows = sub["low"].values
+
+    swing_highs = []
+    swing_lows = []
+
+    for idx in range(1, len(sub) - 1):
+        if highs[idx] >= highs[idx - 1] and highs[idx] >= highs[idx + 1]:
+            swing_highs.append(float(highs[idx]))
+        if lows[idx] <= lows[idx - 1] and lows[idx] <= lows[idx + 1]:
+            swing_lows.append(float(lows[idx]))
+
+    support = swing_lows[-1] if swing_lows else float(sub["low"].min())
+    resistance = swing_highs[-1] if swing_highs else float(sub["high"].max())
+    return support, resistance
+
+
 def analyze_market(candles):
-    """Analyze completed candles only. Caller excludes the live candle."""
+    """Analyze completed candles only."""
     df = prepare_candles(candles)
 
     if len(df) < MIN_CANDLES:
         return None
 
-    close = df.close
-    high = df.high
-    low = df.low
-    opn = df.open
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+    opn = df["open"]
 
     ema9 = close.ewm(span=9, adjust=False).mean()
     ema21 = close.ewm(span=21, adjust=False).mean()
 
     delta = close.diff()
     gain = delta.clip(lower=0).ewm(
-        alpha=1/14, adjust=False, min_periods=14
+        alpha=1 / 14, adjust=False, min_periods=14
     ).mean()
     loss = (-delta.clip(upper=0)).ewm(
-        alpha=1/14, adjust=False, min_periods=14
+        alpha=1 / 14, adjust=False, min_periods=14
     ).mean()
 
     rs = gain / loss.replace(0, float("nan"))
@@ -67,80 +91,118 @@ def analyze_market(candles):
     macd_signal = macd.ewm(span=9, adjust=False).mean()
     hist = macd - macd_signal
 
+    atr = (high - low).rolling(14).mean()
+
     i = len(df) - 1
     price = float(close.iloc[i])
+    prev_close = float(close.iloc[i - 1])
+    prev_open = float(opn.iloc[i - 1])
     o = float(opn.iloc[i])
     h = float(high.iloc[i])
     l = float(low.iloc[i])
 
+    candle_range = max(h - l, 1e-9)
     body = abs(price - o)
     lower_wick = min(o, price) - l
     upper_wick = h - max(o, price)
+    cur_atr = float(atr.iloc[i]) if not pd.isna(atr.iloc[i]) else candle_range
+
+    if body < cur_atr * 0.25 or candle_range <= 0:
+        return None
 
     vals = [
         ema9.iloc[i], ema21.iloc[i], rsi.iloc[i],
         bb_mid.iloc[i], bb_upper.iloc[i], bb_lower.iloc[i],
-        hist.iloc[i], hist.iloc[i-1]
+        hist.iloc[i], hist.iloc[i - 1]
     ]
-
     if any(pd.isna(x) for x in vals):
         return None
+
+    support, resistance = _find_snr_levels(df)
+    tol = max(cur_atr * 0.6, price * 0.0002)
+
+    near_support = abs(l - support) <= tol or abs(price - support) <= tol
+    near_resistance = abs(h - resistance) <= tol or abs(price - resistance) <= tol
+
+    mos_call_ok = price < float(bb_upper.iloc[i]) * 0.9995 and (price - float(ema9.iloc[i])) <= cur_atr * 1.2
+    mos_put_ok = price > float(bb_lower.iloc[i]) * 1.0005 and (float(ema9.iloc[i]) - price) <= cur_atr * 1.2
+
+    bullish_engulf = (
+        price > o
+        and prev_close < prev_open
+        and price >= prev_open
+        and o <= prev_close
+    )
+    bearish_engulf = (
+        price < o
+        and prev_close > prev_open
+        and price <= prev_open
+        and o >= prev_close
+    )
 
     call = 0
     put = 0
     call_reasons = []
     put_reasons = []
 
-    if ema9.iloc[i] > ema21.iloc[i]:
+    if float(ema9.iloc[i]) > float(ema21.iloc[i]):
         call += 1
-        call_reasons.append("EMA bullish")
+        call_reasons.append("EMA 9>21")
 
-    if 50 < rsi.iloc[i] < 68:
+    if 52 <= float(rsi.iloc[i]) <= 68 and float(rsi.iloc[i]) >= float(rsi.iloc[i - 1]):
         call += 1
         call_reasons.append(f"RSI {rsi.iloc[i]:.1f}")
 
-    if hist.iloc[i] > 0 and hist.iloc[i] > hist.iloc[i-1]:
+    if float(hist.iloc[i]) > 0 and float(hist.iloc[i]) > float(hist.iloc[i - 1]):
         call += 1
-        call_reasons.append("MACD bullish")
+        call_reasons.append("MACD rising")
 
-    if price > bb_mid.iloc[i] and price < bb_upper.iloc[i]:
+    if float(bb_mid.iloc[i]) <= price <= float(bb_upper.iloc[i]):
         call += 1
-        call_reasons.append("BB bullish zone")
+        call_reasons.append("BB bullish")
 
-    if price > o and lower_wick > body * 0.5:
+    if near_support or bullish_engulf or (price > o and lower_wick >= body * 0.75):
         call += 1
-        call_reasons.append("Bullish wick")
+        call_reasons.append("SNR/Candle bullish")
 
-    if ema9.iloc[i] < ema21.iloc[i]:
+    if mos_call_ok:
+        call += 1
+        call_reasons.append("MOS ok")
+
+    if float(ema9.iloc[i]) < float(ema21.iloc[i]):
         put += 1
-        put_reasons.append("EMA bearish")
+        put_reasons.append("EMA 9<21")
 
-    if 32 < rsi.iloc[i] < 50:
+    if 32 <= float(rsi.iloc[i]) <= 48 and float(rsi.iloc[i]) <= float(rsi.iloc[i - 1]):
         put += 1
         put_reasons.append(f"RSI {rsi.iloc[i]:.1f}")
 
-    if hist.iloc[i] < 0 and hist.iloc[i] < hist.iloc[i-1]:
+    if float(hist.iloc[i]) < 0 and float(hist.iloc[i]) < float(hist.iloc[i - 1]):
         put += 1
-        put_reasons.append("MACD bearish")
+        put_reasons.append("MACD falling")
 
-    if price < bb_mid.iloc[i] and price > bb_lower.iloc[i]:
+    if float(bb_lower.iloc[i]) <= price <= float(bb_mid.iloc[i]):
         put += 1
-        put_reasons.append("BB bearish zone")
+        put_reasons.append("BB bearish")
 
-    if price < o and upper_wick > body * 0.5:
+    if near_resistance or bearish_engulf or (price < o and upper_wick >= body * 0.75):
         put += 1
-        put_reasons.append("Bearish wick")
+        put_reasons.append("SNR/Candle bearish")
+
+    if mos_put_ok:
+        put += 1
+        put_reasons.append("MOS ok")
 
     if call >= MIN_SCORE and call > put:
         return {
-            "direction": "CALL",
+            "direction": "CALL 📈 (UP)",
             "score": call,
             "reasons": call_reasons
         }
 
     if put >= MIN_SCORE and put > call:
         return {
-            "direction": "PUT",
+            "direction": "PUT 📉 (DOWN)",
             "score": put,
             "reasons": put_reasons
         }
