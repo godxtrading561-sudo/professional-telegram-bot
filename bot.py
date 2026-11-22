@@ -1,85 +1,170 @@
-
 import os
 import time
 import logging
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import pandas as pd
 import requests
+import yfinance as yf
 
-# -------- TELEGRAM CONFIGURATION --------
+from signal_engine import analyze_market
 
-TOKEN = os.environ["BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["CHANNEL_ID"]
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("professional-bot")
 
-TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+TZ = ZoneInfo("Asia/Kolkata")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
+SESSION_TIMES = ["09:00", "12:00", "14:00", "18:00", "23:00"]
+MAX_SIGNALS = 12
+SIGNAL_GAP_SECONDS = 300
+RECHECK_SECONDS = 30
 
-logger = logging.getLogger("PROFESSIONAL_BOT")
+PAIRS = [
+    ("EURUSD=X", "EUR/USD"),
+    ("GBPUSD=X", "GBP/USD"),
+    ("USDJPY=X", "USD/JPY"),
+    ("AUDCAD=X", "AUD/CAD"),
+    ("EURJPY=X", "EUR/JPY"),
+    ("GBPJPY=X", "GBP/JPY"),
+]
 
-
-# -------- SEND TELEGRAM MESSAGE --------
-
-def send_telegram_message(message):
-
-    if not isinstance(message, str) or not message.strip():
-        logger.error("Message cannot be empty")
-        return False
-
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
-
-    for attempt in range(3):
-        try:
-            response = requests.post(
-                TELEGRAM_URL,
-                json=payload,
-                timeout=(10, 20)
-            )
-
-            data = response.json()
-
-            if response.status_code == 200 and data.get("ok"):
-                logger.info("Telegram message sent successfully")
-                return True
-
-            logger.error("Telegram API error: %s", data)
-
-            if response.status_code == 429:
-                wait_time = data.get(
-                    "parameters", {}
-                ).get("retry_after", 5)
-
-                time.sleep(min(int(wait_time), 60))
-                continue
-
-        except (requests.RequestException, ValueError) as error:
-            logger.error("Telegram connection error: %s", error)
-
-        if attempt < 2:
-            time.sleep(2 ** attempt)
-
-    logger.error("Telegram message delivery failed")
+def telegram(text):
+    if not BOT_TOKEN or not CHANNEL_ID:
+        raise RuntimeError("Set BOT_TOKEN and CHANNEL_ID in GitHub Secrets.")
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    try:
+        r = requests.post(url, json={
+            "chat_id": CHANNEL_ID,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
+        }, timeout=20)
+        if r.ok and r.json().get("ok"):
+            return True
+        log.error("Telegram error %s: %s", r.status_code, r.text[:400])
+    except requests.RequestException as e:
+        log.error("Telegram request failed: %s", e)
     return False
 
+def fetch_closed_candles(ticker):
+    df = yf.download(
+        ticker, period="5d", interval="1m",
+        progress=False, auto_adjust=False, threads=False
+    )
+    if df is None or df.empty:
+        return None
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    cols = ["Open", "High", "Low", "Close"]
+    if any(c not in df.columns for c in cols):
+        return None
+    df = df[cols].dropna().copy()
+    df.index = pd.to_datetime(df.index, utc=True)
+    now = pd.Timestamp.now(tz="UTC")
+    df = df[df.index < now.floor("min")]
+    if len(df) < 100 or (now - df.index[-1]).total_seconds() > 180:
+        return None
+    df.columns = [c.lower() for c in df.columns]
+    df = df.reset_index()
+    df = df.rename(columns={df.columns[0]: "timestamp"})
+    return df
 
-# -------- TELEGRAM CONNECTION TEST --------
+def best_signal():
+    for ticker, label in PAIRS:
+        try:
+            candles = fetch_closed_candles(ticker)
+            if candles is None:
+                continue
+            setup = analyze_market(candles)
+            if setup:
+                return label, setup
+        except Exception:
+            log.exception("Analysis failed for %s", ticker)
+    return None, None
 
-if __name__ == "__main__":
+def seconds_until_pre_alert():
+    now = datetime.now(TZ)
+    target = now.replace(second=45, microsecond=0)
+    if now >= target:
+        target += timedelta(minutes=1)
+    return max(0, (target - now).total_seconds())
 
-    logger.info("Testing Telegram connection...")
+def wait_for_pre_alert_slot():
+    delay = seconds_until_pre_alert()
+    if delay:
+        time.sleep(delay)
 
-    success = send_telegram_message(
-        "✅ <b>PROFESSIONAL BOT CONNECTED!</b>\n\n"
-        "🤖 Telegram connection test successful."
+def run_session(session_time):
+    sent_count = 0
+    last_signal_slot = None
+
+    log.info("Session %s started.", session_time)
+    telegram(
+        f"🟢 <b>SESSION STARTED</b>\n"
+        f"Session: <b>{session_time} IST</b>\n"
+        "Signals will be sent about 15 seconds before the next 1-minute candle."
     )
 
-    if success:
-        logger.info("Telegram test completed successfully")
-    else:
-        logger.error("Telegram test failed")
+    while sent_count < MAX_SIGNALS:
+        wait_for_pre_alert_slot()
+        slot = datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
+        if slot == last_signal_slot:
+            time.sleep(1)
+            continue
+
+        label, setup = best_signal()
+        if not setup:
+            log.info("No valid setup in pre-alert slot %s.", slot)
+            time.sleep(RECHECK_SECONDS)
+            continue
+
+        next_candle_time = (
+            datetime.now(TZ).replace(second=0, microsecond=0)
+            + timedelta(minutes=1)
+        )
+        message = (
+            f"⏳ <b>PRE-ALERT — TRADE #{sent_count + 1}/12</b>\n"
+            f"Asset: <b>{label}</b>\n"
+            f"Timeframe: <b>1 Minute</b>\n"
+            f"Direction: <b>{setup['direction']}</b>\n"
+            f"Confluence: <b>{setup['score']}/5</b>\n"
+            f"Reasons: {' + '.join(setup['reasons'])}\n"
+            f"Planned entry candle: "
+            f"<b>{next_candle_time.strftime('%H:%M:%S')} IST</b>\n"
+            "⚠️ Pre-alert target is approximate; feed/network delays may affect timing."
+        )
+
+        if telegram(message):
+            sent_count += 1
+            last_signal_slot = slot
+            log.info("Pre-alert %d/%d sent for %s.", sent_count, MAX_SIGNALS, label)
+            if sent_count >= MAX_SIGNALS:
+                break
+            time.sleep(SIGNAL_GAP_SECONDS)
+        else:
+            log.warning("Telegram send failed; retrying next pre-alert slot.")
+            time.sleep(RECHECK_SECONDS)
+
+    telegram(
+        "🔒 <b>SESSION CLOSED</b>\n"
+        "✅ All 12 signals were successfully sent.\n"
+        "No further signals will be sent in this session."
+    )
+    log.info("Session %s closed after 12 successful sends.", session_time)
+
+def main():
+    if not BOT_TOKEN or not CHANNEL_ID:
+        raise RuntimeError("Missing BOT_TOKEN or CHANNEL_ID secrets.")
+
+    now = datetime.now(TZ)
+    current = now.strftime("%H:%M")
+    if current not in SESSION_TIMES:
+        log.info("Not a configured session start (%s IST); exiting.", current)
+        return
+    run_session(current)
+
+if __name__ == "__main__":
+    main()
