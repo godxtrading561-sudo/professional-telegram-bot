@@ -1,210 +1,63 @@
+import os
+import time
+import logging
+from datetime import datetime, timezone, timedelta
 import pandas as pd
-import numpy as np
+import yfinance as yf
+import requests
 
-MIN_CANDLES = 100
-MIN_SCORE = 5
+from signal_engine import analyze_market
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger("bot")
 
-def prepare_candles(df):
-    df = df.copy()
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df.columns = [str(c).lower().strip() for c in df.columns]
+IST = timezone(timedelta(hours=5, minutes=30))
 
-    required = ["open", "high", "low", "close"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing candle columns: {missing}")
+# Top 10 liquid forex pairs -> yfinance tickers
+TOP_10_PAIRS = {
+    "EUR/USD": "EURUSD=X",
+    "GBP/USD": "GBPUSD=X",
+    "USD/JPY": "USDJPY=X",
+    "AUD/CAD": "AUDCAD=X",
+    "EUR/JPY": "EURJPY=X",
+    "GBP/JPY": "GBPJPY=X",
+    "AUD/USD": "AUDUSD=X",
+    "USD/CHF": "USDCHF=X",
+    "NZD/USD": "NZDUSD=X",
+    "EUR/GBP": "EURGBP=X",
+}
 
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(
-            df["timestamp"], errors="coerce", utc=True
-        )
-        df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
-        df = df.drop_duplicates(subset=["timestamp"], keep="last")
-    else:
-        df = df.sort_index()
-
-    for col in required:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    return df.dropna(subset=required).reset_index(drop=True)
-
-
-def _find_snr_levels(df, lookback=40):
-    sub = df.iloc[-lookback:-1]
-    if len(sub) < 10:
-        return float(df["low"].iloc[-20:-1].min()), float(df["high"].iloc[-20:-1].max())
-
-    highs = sub["high"].values
-    lows = sub["low"].values
-
-    swing_highs = []
-    swing_lows = []
-
-    for idx in range(1, len(sub) - 1):
-        if highs[idx] >= highs[idx - 1] and highs[idx] >= highs[idx + 1]:
-            swing_highs.append(float(highs[idx]))
-        if lows[idx] <= lows[idx - 1] and lows[idx] <= lows[idx + 1]:
-            swing_lows.append(float(lows[idx]))
-
-    support = swing_lows[-1] if swing_lows else float(sub["low"].min())
-    resistance = swing_highs[-1] if swing_highs else float(sub["high"].max())
-    return support, resistance
+SESSION_TIMES = ["09:00", "12:00", "14:00", "18:00", "23:00"]
+MAX_RUNTIME_SECONDS = 75 * 60
 
 
-def analyze_market(candles):
-    """Analyze completed candles only."""
-    df = prepare_candles(candles)
+def send_telegram_message(text: str) -> None:
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        logger.warning("Telegram credentials missing; skipping message.")
+        return
 
-    if len(df) < MIN_CANDLES:
-        return None
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=15)
+        if not resp.ok:
+            logger.error("Telegram API error (%s): %s", resp.status_code, resp.text)
+    except Exception as exc:
+        logger.error("Failed to send Telegram message: %s", exc)
 
-    close = df["close"]
-    high = df["high"]
-    low = df["low"]
-    opn = df["open"]
 
-    ema9 = close.ewm(span=9, adjust=False).mean()
-    ema21 = close.ewm(span=21, adjust=False).mean()
-
-    delta = close.diff()
-    gain = delta.clip(lower=0).ewm(
-        alpha=1 / 14, adjust=False, min_periods=14
-    ).mean()
-    loss = (-delta.clip(upper=0)).ewm(
-        alpha=1 / 14, adjust=False, min_periods=14
-    ).mean()
-
-    rs = gain / loss.replace(0, float("nan"))
-    rsi = (100 - 100 / (1 + rs)).fillna(50)
-
-    bb_mid = close.rolling(20).mean()
-    bb_std = close.rolling(20).std()
-    bb_upper = bb_mid + 2 * bb_std
-    bb_lower = bb_mid - 2 * bb_std
-
-    macd = (
-        close.ewm(span=12, adjust=False).mean()
-        - close.ewm(span=26, adjust=False).mean()
-    )
-    macd_signal = macd.ewm(span=9, adjust=False).mean()
-    hist = macd - macd_signal
-
-    atr = (high - low).rolling(14).mean()
-
-    i = len(df) - 1
-    price = float(close.iloc[i])
-    prev_close = float(close.iloc[i - 1])
-    prev_open = float(opn.iloc[i - 1])
-    o = float(opn.iloc[i])
-    h = float(high.iloc[i])
-    l = float(low.iloc[i])
-
-    candle_range = max(h - l, 1e-9)
-    body = abs(price - o)
-    lower_wick = min(o, price) - l
-    upper_wick = h - max(o, price)
-    cur_atr = float(atr.iloc[i]) if not pd.isna(atr.iloc[i]) else candle_range
-
-    if body < cur_atr * 0.25 or candle_range <= 0:
-        return None
-
-    vals = [
-        ema9.iloc[i], ema21.iloc[i], rsi.iloc[i],
-        bb_mid.iloc[i], bb_upper.iloc[i], bb_lower.iloc[i],
-        hist.iloc[i], hist.iloc[i - 1]
-    ]
-    if any(pd.isna(x) for x in vals):
-        return None
-
-    support, resistance = _find_snr_levels(df)
-    tol = max(cur_atr * 0.6, price * 0.0002)
-
-    near_support = abs(l - support) <= tol or abs(price - support) <= tol
-    near_resistance = abs(h - resistance) <= tol or abs(price - resistance) <= tol
-
-    mos_call_ok = price < float(bb_upper.iloc[i]) * 0.9995 and (price - float(ema9.iloc[i])) <= cur_atr * 1.2
-    mos_put_ok = price > float(bb_lower.iloc[i]) * 1.0005 and (float(ema9.iloc[i]) - price) <= cur_atr * 1.2
-
-    bullish_engulf = (
-        price > o
-        and prev_close < prev_open
-        and price >= prev_open
-        and o <= prev_close
-    )
-    bearish_engulf = (
-        price < o
-        and prev_close > prev_open
-        and price <= prev_open
-        and o >= prev_close
-    )
-
-    call = 0
-    put = 0
-    call_reasons = []
-    put_reasons = []
-
-    if float(ema9.iloc[i]) > float(ema21.iloc[i]):
-        call += 1
-        call_reasons.append("EMA 9>21")
-
-    if 52 <= float(rsi.iloc[i]) <= 68 and float(rsi.iloc[i]) >= float(rsi.iloc[i - 1]):
-        call += 1
-        call_reasons.append(f"RSI {rsi.iloc[i]:.1f}")
-
-    if float(hist.iloc[i]) > 0 and float(hist.iloc[i]) > float(hist.iloc[i - 1]):
-        call += 1
-        call_reasons.append("MACD rising")
-
-    if float(bb_mid.iloc[i]) <= price <= float(bb_upper.iloc[i]):
-        call += 1
-        call_reasons.append("BB bullish")
-
-    if near_support or bullish_engulf or (price > o and lower_wick >= body * 0.75):
-        call += 1
-        call_reasons.append("SNR/Candle bullish")
-
-    if mos_call_ok:
-        call += 1
-        call_reasons.append("MOS ok")
-
-    if float(ema9.iloc[i]) < float(ema21.iloc[i]):
-        put += 1
-        put_reasons.append("EMA 9<21")
-
-    if 32 <= float(rsi.iloc[i]) <= 48 and float(rsi.iloc[i]) <= float(rsi.iloc[i - 1]):
-        put += 1
-        put_reasons.append(f"RSI {rsi.iloc[i]:.1f}")
-
-    if float(hist.iloc[i]) < 0 and float(hist.iloc[i]) < float(hist.iloc[i - 1]):
-        put += 1
-        put_reasons.append("MACD falling")
-
-    if float(bb_lower.iloc[i]) <= price <= float(bb_mid.iloc[i]):
-        put += 1
-        put_reasons.append("BB bearish")
-
-    if near_resistance or bearish_engulf or (price < o and upper_wick >= body * 0.75):
-        put += 1
-        put_reasons.append("SNR/Candle bearish")
-
-    if mos_put_ok:
-        put += 1
-        put_reasons.append("MOS ok")
-
-    if call >= MIN_SCORE and call > put:
-        return {
-            "direction": "CALL 📈 (UP)",
-            "score": call,
-            "reasons": call_reasons
-        }
-
-    if put >= MIN_SCORE and put > call:
-        return {
-            "direction": "PUT 📉 (DOWN)",
-            "score": put,
-            "reasons": put_reasons
-        }
-
-    return None
+def fetch_candles(ticker: str, period: str = "2d", interval: str = "1m") -> pd.DataFrame:
+    df = yf.download(
+        tickers=ticker,
+        period=period,
+        interval=interval,
+        progress=False
