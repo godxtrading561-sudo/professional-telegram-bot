@@ -79,17 +79,21 @@ def fetch_candles(ticker: str, period: str = "2d", interval: str = "1m") -> pd.D
 
 
 def format_signal_message(pair: str, signal: dict, now_ist: datetime) -> str:
-    direction = str(signal.get("direction", signal.get("side", "BUY"))).upper()
-    expiry = signal.get("expiry", "1M")
-    confidence = signal.get("confidence", signal.get("score", ""))
-    conf_line = f"\n🎯 <b>Filter:</b> {confidence}" if confidence != "" else ""
+    direction = str(signal.get("direction", "BUY")).strip()
+    score = signal.get("score", "")
+    reasons = signal.get("reasons", [])
+
+    score_line = f"\n🎯 <b>Score:</b> {score}/6" if score != "" else ""
+    reasons_text = ", ".join(str(r) for r in reasons) if reasons else ""
+    reasons_line = f"\n📌 <b>Confluence:</b> {reasons_text}" if reasons_text else ""
 
     return (
         f"⚡ <b>LIVE FOREX SIGNAL</b> ⚡\n\n"
         f"💱 <b>Pair:</b> {pair}\n"
         f"📊 <b>Direction:</b> {direction}\n"
-        f"⏳ <b>Expiry:</b> {expiry}"
-        f"{conf_line}\n"
+        f"⏳ <b>Expiry:</b> 1M"
+        f"{score_line}"
+        f"{reasons_line}\n"
         f"🕒 <b>Time (IST):</b> {now_ist.strftime('%H:%M:%S')}"
     )
 
@@ -121,19 +125,15 @@ def run_live_session(mode: str = "SCHEDULED") -> None:
 
             try:
                 df = fetch_candles(ticker=ticker, period="2d", interval="1m")
-                if df.empty or len(df) < 20:
+                if df.empty or len(df) < 100:
                     continue
 
-                if "pair" in evaluate_signal.__code__.co_varnames:
-                    signal = evaluate_signal(df, pair=pair)
-                else:
-                    signal = evaluate_signal(df)
-
+                signal = analyze_market(df)
                 if not signal:
                     continue
 
                 last_idx = str(df.index[-1])
-                direction = str(signal.get("direction", signal.get("side", ""))).upper()
+                direction = str(signal.get("direction", "")).strip()
                 dedup_key = f"{pair}:{last_idx}:{direction}"
 
                 if dedup_key in seen_signals:
