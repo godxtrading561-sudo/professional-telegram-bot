@@ -1,63 +1,64 @@
-import os
-import time
-import logging
-from datetime import datetime, timezone, timedelta
 import pandas as pd
+import numpy as np
 import yfinance as yf
-import requests
 
-from signal_engine import analyze_market
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-logger = logging.getLogger("bot")
-
-IST = timezone(timedelta(hours=5, minutes=30))
-
-# Top 10 liquid forex pairs -> yfinance tickers
-TOP_10_PAIRS = {
-    "EUR/USD": "EURUSD=X",
-    "GBP/USD": "GBPUSD=X",
-    "USD/JPY": "USDJPY=X",
-    "AUD/CAD": "AUDCAD=X",
-    "EUR/JPY": "EURJPY=X",
-    "GBP/JPY": "GBPJPY=X",
-    "AUD/USD": "AUDUSD=X",
-    "USD/CHF": "USDCHF=X",
-    "NZD/USD": "NZDUSD=X",
-    "EUR/GBP": "EURGBP=X",
-}
-
-SESSION_TIMES = ["09:00", "12:00", "14:00", "18:00", "23:00"]
-MAX_RUNTIME_SECONDS = 75 * 60
+MIN_CANDLES = 100
+MIN_SCORE = 5
 
 
-def send_telegram_message(text: str) -> None:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-    if not token or not chat_id:
-        logger.warning("Telegram credentials missing; skipping message.")
-        return
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-    }
-    try:
-        resp = requests.post(url, json=payload, timeout=15)
-        if not resp.ok:
-            logger.error("Telegram API error (%s): %s", resp.status_code, resp.text)
-    except Exception as exc:
-        logger.error("Failed to send Telegram message: %s", exc)
-
-
-def fetch_candles(ticker: str, period: str = "2d", interval: str = "1m") -> pd.DataFrame:
+def download_candles(ticker, period="2d", interval="1m"):
     df = yf.download(
         tickers=ticker,
         period=period,
         interval=interval,
-        progress=False
+        progress=False,
+        auto_adjust=False,
+    )
+    return df if df is not None else pd.DataFrame()
+
+
+def prepare_candles(df):
+    df = df.copy()
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df.columns = [str(c).lower().strip() for c in df.columns]
+
+    required = ["open", "high", "low", "close"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing candle columns: {missing}")
+
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(
+            df["timestamp"], errors="coerce", utc=True
+        )
+        df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+        df = df.drop_duplicates(subset=["timestamp"], keep="last")
+    else:
+        df = df.sort_index()
+
+    for col in required:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df.dropna(subset=required).reset_index(drop=True)
+
+
+def _find_snr_levels(df, lookback=40):
+    sub = df.iloc[-lookback:-1]
+    if len(sub) < 10:
+        return float(df["low"].iloc[-20:-1].min()), float(df["high"].iloc[-20:-1].max())
+
+    highs = sub["high"].values
+    lows = sub["low"].values
+
+    swing_highs = []
+    swing_lows = []
+
+    for idx in range(1, len(sub) - 1):
+        if highs[idx] >= highs[idx - 1] and highs[idx] >= highs[idx + 1]:
+            swing_highs.append(float(highs[idx]))
+        if lows[idx] <= lows[idx - 1] and lows[idx] <= lows[idx + 1]:
+            swing_lows.append(float(lows[idx]))
+
+    support = swing_lows[-1] if swing_lows else float(sub["low"].min())
+    resistance = swing_highs
