@@ -115,13 +115,3 @@ def analyze_market(candles):
 
     candle_range = max(h - l, 1e-9)
     body = abs(price - o)
-    lower_wick = min(o, price) - l
-    upper_wick = h - max(o, price)
-    cur_atr = float(atr.iloc[i]) if not pd.isna(atr.iloc[i]) else candle_range
-
-    if body < cur_atr * 0.25 or candle_range <= 0:
-        return None
-
-    vals = [
-        ema9.iloc[i], ema21.iloc[i], rsi.iloc[i],
-        bb_mid.iloc[i], bb_upper.iloc[i], bb_
