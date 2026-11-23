@@ -6,7 +6,7 @@ import pandas as pd
 import yfinance as yf
 import requests
 
-from signal_engine import evaluate_signal
+from signal_engine import analyze_signal
 
 logging.basicConfig(
     level=logging.INFO,
