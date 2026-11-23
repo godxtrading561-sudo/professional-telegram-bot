@@ -61,4 +61,67 @@ def _find_snr_levels(df, lookback=40):
             swing_lows.append(float(lows[idx]))
 
     support = swing_lows[-1] if swing_lows else float(sub["low"].min())
-    resistance = swing_highs
+    resistance = swing_highs[-1] if swing_highs else float(sub["high"].max())
+    return support, resistance
+
+
+def analyze_market(candles):
+    """Analyze completed candles only."""
+    df = prepare_candles(candles)
+
+    if len(df) < MIN_CANDLES:
+        return None
+
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+    opn = df["open"]
+
+    ema9 = close.ewm(span=9, adjust=False).mean()
+    ema21 = close.ewm(span=21, adjust=False).mean()
+
+    delta = close.diff()
+    gain = delta.clip(lower=0).ewm(
+        alpha=1 / 14, adjust=False, min_periods=14
+    ).mean()
+    loss = (-delta.clip(upper=0)).ewm(
+        alpha=1 / 14, adjust=False, min_periods=14
+    ).mean()
+
+    rs = gain / loss.replace(0, float("nan"))
+    rsi = (100 - 100 / (1 + rs)).fillna(50)
+
+    bb_mid = close.rolling(20).mean()
+    bb_std = close.rolling(20).std()
+    bb_upper = bb_mid + 2 * bb_std
+    bb_lower = bb_mid - 2 * bb_std
+
+    macd = (
+        close.ewm(span=12, adjust=False).mean()
+        - close.ewm(span=26, adjust=False).mean()
+    )
+    macd_signal = macd.ewm(span=9, adjust=False).mean()
+    hist = macd - macd_signal
+
+    atr = (high - low).rolling(14).mean()
+
+    i = len(df) - 1
+    price = float(close.iloc[i])
+    prev_close = float(close.iloc[i - 1])
+    prev_open = float(opn.iloc[i - 1])
+    o = float(opn.iloc[i])
+    h = float(high.iloc[i])
+    l = float(low.iloc[i])
+
+    candle_range = max(h - l, 1e-9)
+    body = abs(price - o)
+    lower_wick = min(o, price) - l
+    upper_wick = h - max(o, price)
+    cur_atr = float(atr.iloc[i]) if not pd.isna(atr.iloc[i]) else candle_range
+
+    if body < cur_atr * 0.25 or candle_range <= 0:
+        return None
+
+    vals = [
+        ema9.iloc[i], ema21.iloc[i], rsi.iloc[i],
+        bb_mid.iloc[i], bb_upper.iloc[i], bb_
