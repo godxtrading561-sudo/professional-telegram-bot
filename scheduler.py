@@ -1,4 +1,3 @@
-
 import time
 import logging
 from datetime import datetime
@@ -9,10 +8,11 @@ from daily_messages import (
     MORNING_MESSAGE,
     SCHEDULE_MESSAGE,
     GOOD_NIGHT_MESSAGE,
+    SESSION_START_MESSAGE,
 )
 from bot import send_message
 from state import load_state, save_state
-from session_controller import check_session_start
+from session_controller import SESSIONS
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -52,6 +52,29 @@ def check_daily_messages():
         save_state(state)
 
         logger.info("Daily message sent: %s", name)
+
+
+def check_session_start():
+    now = datetime.now(IST)
+    today = now.strftime("%Y-%m-%d")
+    state = load_state()
+
+    for session_name, session_time in SESSIONS.items():
+        if now.strftime("%H:%M") != session_time:
+            continue
+
+        key = f"{today}_{session_name}_started"
+
+        if state.get(key):
+            continue
+
+        send_message(SESSION_START_MESSAGE)
+
+        state[key] = True
+        state[f"{today}_{session_name}_count"] = 0
+        save_state(state)
+
+        logger.info("Session start message sent: %s", session_name)
 
 
 def run_scheduler():
