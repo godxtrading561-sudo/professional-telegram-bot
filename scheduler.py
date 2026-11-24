@@ -1,94 +1,65 @@
 import time
 import logging
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
 
-from config import DAILY_MESSAGES
+from config import TIMEZONE, TRADING_SESSIONS
+from bot import run_one_session, send_message
 from daily_messages import (
     MORNING_MESSAGE,
     SCHEDULE_MESSAGE,
     GOOD_NIGHT_MESSAGE,
-    SESSION_START_MESSAGE,
-)
-from bot import send_message
-from state import load_state, save_state
-from session_controller import SESSIONS
-
-IST = ZoneInfo("Asia/Kolkata")
-
-MESSAGES = {
-    "morning": MORNING_MESSAGE,
-    "schedule": SCHEDULE_MESSAGE,
-    "good_night": GOOD_NIGHT_MESSAGE,
-}
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
-logger = logging.getLogger("scheduler")
+log = logging.getLogger("scheduler")
 
 
-def check_daily_messages():
-    now = datetime.now(IST)
-    today = now.strftime("%Y-%m-%d")
-    state = load_state()
+def wait_until(target):
+    while True:
+        now = datetime.now(TIMEZONE)
+        seconds = (target - now).total_seconds()
 
-    for name, scheduled_time in DAILY_MESSAGES.items():
-        if (now.hour, now.minute) != (
-            scheduled_time.hour,
-            scheduled_time.minute,
-        ):
-            continue
+        if seconds <= 0:
+            return
 
-        key = f"{today}_{name}"
-
-        if state.get(key):
-            continue
-
-        send_message(MESSAGES[name])
-        state[key] = True
-        save_state(state)
-
-        logger.info("Daily message sent: %s", name)
+        time.sleep(min(seconds, 30))
 
 
-def check_session_start():
-    now = datetime.now(IST)
-    today = now.strftime("%Y-%m-%d")
-    state = load_state()
-
-    for session_name, session_time in SESSIONS.items():
-        if now.strftime("%H:%M") != session_time:
-            continue
-
-        key = f"{today}_{session_name}_started"
-
-        if state.get(key):
-            continue
-
-        send_message(SESSION_START_MESSAGE)
-
-        state[key] = True
-        state[f"{today}_{session_name}_count"] = 0
-        save_state(state)
-
-        logger.info("Session start message sent: %s", session_name)
-
-
-def run_scheduler():
-    logger.info("Professional Bot scheduler started (IST)")
+def main():
+    sent_today = set()
+    current_day = datetime.now(TIMEZONE).date()
 
     while True:
-        try:
-            check_daily_messages()
-            check_session_start()
-        except Exception:
-            logger.exception("Scheduler cycle failed")
+        now = datetime.now(TIMEZONE)
+
+        if now.date() != current_day:
+            sent_today.clear()
+            current_day = now.date()
+
+        if now.hour == 7 and now.minute == 0 and "morning" not in sent_today:
+            send_message(MORNING_MESSAGE)
+            sent_today.add("morning")
+
+        if now.hour == 8 and now.minute == 0 and "schedule" not in sent_today:
+            send_message(SCHEDULE_MESSAGE)
+            sent_today.add("schedule")
+
+        if now.hour == 23 and now.minute == 30 and "goodnight" not in sent_today:
+            send_message(GOOD_NIGHT_MESSAGE)
+            sent_today.add("goodnight")
+
+        for session_time in TRADING_SESSIONS:
+            key = session_time.strftime("%H:%M")
+
+            if (
+                now.hour == session_time.hour
+                and now.minute == session_time.minute
+                and key not in sent_today
+            ):
+                sent_today.add(key)
+                run_one_session(now.strftime("%Y-%m-%d-%H-%M"))
 
         time.sleep(10)
 
 
 if __name__ == "__main__":
-    run_scheduler()
+    main()
