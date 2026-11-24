@@ -1,14 +1,18 @@
-
+import os
 from datetime import time
 from zoneinfo import ZoneInfo
 
 TIMEZONE = ZoneInfo("Asia/Kolkata")
 
-DAILY_MESSAGES = {
-    "morning": time(7, 0),
-    "schedule": time(8, 0),
-    "good_night": time(0, 0),
-}
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "")
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+
+MAX_SIGNALS_PER_SESSION = 12
+SIGNAL_INTERVAL_SECONDS = 300
+RETRY_INTERVAL_SECONDS = 30
 
 TRADING_SESSIONS = [
     time(9, 0),
@@ -18,8 +22,17 @@ TRADING_SESSIONS = [
     time(23, 0),
 ]
 
-MAX_SIGNALS_PER_SESSION = 12
-SIGNAL_INTERVAL_MINUTES = 5
+MIN_CANDLES = 200
+MIN_SIGNAL_SCORE = 4
 
-# Session close ke baad signals stop.
-STOP_AFTER_SESSION_CLOSE = True
+TRADING_PAIRS = {
+    "EURUSD": "EURUSD=X",
+    "GBPUSD": "GBPUSD=X",
+    "USDJPY": "JPY=X",
+    "AUDCAD": "AUDCAD=X",
+    "EURJPY": "EURJPY=X",
+    "GBPJPY": "GBPJPY=X",
+}
+
+DATA_FOLDER = "data"
+REPORT_FOLDER = "reports"
