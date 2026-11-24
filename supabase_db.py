@@ -1,42 +1,50 @@
-
 import os
-import requests
+from supabase import create_client
+from config import SUPABASE_URL, SUPABASE_KEY
 
-SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+_client = None
 
-TABLE_URL = f"{SUPABASE_URL}/rest/v1/bot_state"
 
-HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json",
-}
+def get_client():
+    global _client
 
-def save_bot_state(state_id, data):
-    response = requests.post(
-        TABLE_URL,
-        headers={
-            **HEADERS,
-            "Prefer": "resolution=merge-duplicates,return=minimal",
-        },
-        json={"id": state_id, "data": data},
-        params={"on_conflict": "id"},
-        timeout=20,
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+
+    if _client is None:
+        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+    return _client
+
+
+def save_session(session_id, data):
+    client = get_client()
+
+    if client is None:
+        return False
+
+    client.table("bot_state").upsert({
+        "session_id": session_id,
+        "state": data,
+    }).execute()
+
+    return True
+
+
+def get_session(session_id):
+    client = get_client()
+
+    if client is None:
+        return None
+
+    response = (
+        client.table("bot_state")
+        .select("*")
+        .eq("session_id", session_id)
+        .execute()
     )
-    response.raise_for_status()
 
-def load_bot_state(state_id):
-    response = requests.get(
-        TABLE_URL,
-        headers=HEADERS,
-        params={
-            "id": f"eq.{state_id}",
-            "select": "data",
-        },
-        timeout=20,
-    )
-    response.raise_for_status()
-    rows = response.json()
-    return rows[0]["data"] if rows else {}
-  
+    if response.data:
+        return response.data[0]["state"]
+
+    return None
