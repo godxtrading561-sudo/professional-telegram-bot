@@ -1,50 +1,36 @@
-
-SESSION_LIVE = """🚨 VIP SESSION IS LIVE NOW! 🟢🔥
-
-⚡ SESSION HAS STARTED!
-
-"Keep your focus high and emotions low. Patience pays!" 🎯📈
-
-💻 STATUS -: Session In Progress
-
-⏳ ACTION -: Wait for the Signal!
-
-🛡️ RULE -: Strict Money Management (2%-5% Capital)
-
-📢 Keep your terminals open and stay alert! First trade signal is dropping any second... 🚀💰"""
+def session_start_message(session_id):
+    return (
+        "🟢 <b>TRADING SESSION STARTED</b>\n\n"
+        f"Session: <b>{session_id}</b>\n"
+        "Timeframe: <b>1 Minute</b>\n"
+        "Maximum signals: <b>12</b>\n"
+        "⚠️ Use strict risk management."
+    )
 
 
-TRADE_SIGNAL_TEMPLATE = """📊 TRADE SIGNAL SETUP
+def signal_message(number, trade):
+    direction = trade["direction"]
+    icon = "📈" if direction == "CALL" else "📉"
 
-PAIR NAME -: {pair}
+    reasons = "\n".join(
+        f"• {reason}" for reason in trade["reasons"]
+    )
 
-TIME FRAME -: {timeframe}
-
-DIRECTION -: {direction}
-
-⚠️ MONEY MANAGEMENT RULE:
-Always use proper risk management (Max 2% to 5% of your total capital per trade). Never chase losses blindly! 🚀💰"""
-
-
-TRADE_RESULT_TEMPLATE = """📊 TRADE RESULT UPDATE
-
-TRADE RESULT -: {result}
-
-TRADE ACCURACY -: {accuracy}
-
-💡 PRO TIP: Market mein losses bhi trading ka part hote hain. Proper money management aur discipline hi long-term success ki key hai! 🚀💰"""
+    return (
+        f"🚨 <b>TRADE SIGNAL {number}/12</b>\n\n"
+        f"Asset: <b>{trade['pair']}</b>\n"
+        "Timeframe: <b>1 Minute</b>\n"
+        f"Direction: {icon} <b>{direction}</b>\n"
+        f"Confluence score: <b>{trade['score']}/5</b>\n\n"
+        f"<b>Reasons:</b>\n{reasons}\n\n"
+        "⚠️ Confirm price and execution on your trading platform."
+    )
 
 
-SESSION_CLOSE = """🔴 VIP SESSION CLOSED! 🔚✨
-
-📊 SESSION COMPLETED
-
-"Consistency over intensity. Secure your profit and exit the market!" 🎯📈
-
-💼 STATUS -: All Trades Wrapped Up
-
-🛡️ RULE -: Close your terminal now — Do NOT overtrade!
-
-🧠 MINDSET -: Respect your daily target and protect your capital.
-
-🎉 Great job today, team! Take your profits, relax, and get ready for the next session. See you soon! 🚀💰"""
+def session_close_message(sent, summary):
+    return (
+        "🔒 <b>SESSION CLOSED</b>\n\n"
+        f"Successfully sent signals: <b>{sent}/12</b>\n"
+        f"{summary}\n\n"
+        "No further signals will be sent in this session."
+    )
