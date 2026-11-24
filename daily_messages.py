@@ -1,4 +1,3 @@
-
 MORNING_MESSAGE = """🌅 RISE AND SHINE TRADERS! ☕🔥
 
 🌟 MORNING BRIEFING & FOCUS
@@ -39,4 +38,34 @@ Market Closed / Sessions Completed
 
 🛡️ REMINDER -: Protect your peace and your capital. Tomorrow is a new opportunity!
 
-⭐ Sleep tight and get ready for another massive green day ahead. Good night, traders! 🚀💰"""
+⭐ Sleep tight and get ready for another massive green day ahead! Good night, traders! 🚀💰"""
+
+
+SESSION_START_MESSAGE = """🚨 VIP SESSION IS LIVE NOW! 🟢🔥
+
+⚡ SESSION HAS STARTED!
+
+"Keep your focus high and emotions low. Patience pays!" 🎯📈
+
+💻 STATUS -: Session In Progress
+
+⏳ ACTION -: Wait for the Signal!
+
+🛡️ RULE -: Strict Money Management (2%-5% Capital
+
+📢 Keep your terminals open and stay alert! First trade signal is dropping any second... 🚀💰"""
+
+
+SESSION_CLOSE_MESSAGE = """🔴 VIP SESSION CLOSED! 🔚✨
+
+📊 SESSION COMPLETED
+
+"Consistency over intensity. Secure your profit and exit the market!" 🎯📈
+
+💼 STATUS -: All Trades Wrapped Up
+
+🛡️ RULE -: Close your terminal now — Do NOT overtrade!
+
+🧠 MINDSET -: Respect your daily target and protect your capital.
+
+🎉 Great job today, team! Take your profits, relax, and get ready for the next session. See you soon! 🚀💰"""
