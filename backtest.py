@@ -4,86 +4,93 @@ import pandas as pd
 
 from signal_engine import analyze_market, prepare_candles
 
-DATA_DIR = "data"
+DATA_FOLDER = "data"
+OUTPUT_FILE = "backtest_trades.csv"
 
 
 def backtest_file(path):
     df = prepare_candles(pd.read_csv(path))
-    rows = []
+    trades = []
 
-    for i in range(100, len(df) - 2):
-        signal = analyze_market(df.iloc[:i + 1].copy())
+    for i in range(200, len(df) - 2):
+        signal = analyze_market(df.iloc[:i + 1])
 
         if not signal:
             continue
 
-        alert_candle = df.iloc[i + 1]
         entry_candle = df.iloc[i + 2]
-
         entry = float(entry_candle["open"])
         exit_price = float(entry_candle["close"])
 
-        if exit_price > entry:
-            outcome = "WIN" if signal["direction"] == "CALL" else "LOSS"
-        elif exit_price < entry:
-            outcome = "WIN" if signal["direction"] == "PUT" else "LOSS"
+        if exit_price == entry:
+            result = "TIE"
+        elif signal["direction"] == "CALL":
+            result = "WIN" if exit_price > entry else "LOSS"
         else:
-            outcome = "TIE"
+            result = "WIN" if exit_price < entry else "LOSS"
 
-        rows.append({
+        trades.append({
             "pair": os.path.basename(path).replace(".csv", ""),
-            "signal": signal["direction"],
+            "direction": signal["direction"],
             "score": signal["score"],
-            "alert_candle_timestamp": alert_candle.get("timestamp", i + 1),
-            "entry_timestamp": entry_candle.get("timestamp", i + 2),
             "entry": entry,
             "exit": exit_price,
-            "outcome": outcome,
-            "reasons": " | ".join(signal["reasons"])
+            "result": result,
         })
 
-    return rows
+    return trades
 
 
 def main():
-    paths = sorted(glob.glob(os.path.join(DATA_DIR, "*.csv")))
+    files = glob.glob(os.path.join(DATA_FOLDER, "*.csv"))
 
-    if not paths:
-        raise SystemExit(
-            "No CSV files in data/. Expected timestamp,open,high,low,close."
-        )
+    if not files:
+        raise SystemExit("No candle CSV files found in data/.")
 
-    trades = []
+    all_trades = []
 
-    for path in paths:
-        print(f"Testing {path}")
-        trades.extend(backtest_file(path))
+    for path in files:
+        print("Testing", path)
+        all_trades.extend(backtest_file(path))
 
-    if not trades:
-        print("No signals found.")
+    if not all_trades:
+        print("No signals generated.")
         return
 
-    result = pd.DataFrame(trades)
-    result.to_csv("backtest_trades.csv", index=False)
+    df = pd.DataFrame(all_trades)
+    df.to_csv(OUTPUT_FILE, index=False)
 
-    decisive = result[result.outcome != "TIE"]
-    wins = int((decisive.outcome == "WIN").sum())
-    losses = int((decisive.outcome == "LOSS").sum())
-    ties = int((result.outcome == "TIE").sum())
+    wins = int((df["result"] == "WIN").sum())
+    losses = int((df["result"] == "LOSS").sum())
+    ties = int((df["result"] == "TIE").sum())
 
-    accuracy = wins / len(decisive) * 100 if len(decisive) else 0
+    decisive = wins + losses
+    accuracy = wins / decisive * 100 if decisive else 0
 
-    print("\n===== BACKTEST SUMMARY =====")
-    print(f"Total signals: {len(result)}")
-    print(f"Wins: {wins} | Losses: {losses} | Ties: {ties}")
+    print("\n========== BACKTEST REPORT ==========")
+    print("Total signals:", len(df))
+    print("Wins:", wins)
+    print("Losses:", losses)
+    print("Ties:", ties)
     print(f"Accuracy excluding ties: {accuracy:.2f}%")
 
-    for direction, group in result.groupby("signal"):
-        g = group[group.outcome != "TIE"]
-        w = int((g.outcome == "WIN").sum())
-        l = int((g.outcome == "LOSS").sum())
-        acc = w / len(g) * 100 if len(g) else 0
+    print("\nPAIR-WISE RESULTS")
+    for pair, group in df.groupby("pair"):
+        w = int((group["result"] == "WIN").sum())
+        l = int((group["result"] == "LOSS").sum())
+        n = w + l
+        acc = w / n * 100 if n else 0
+        print(f"{pair}: {acc:.2f}% ({w} wins / {l} losses)")
+
+    print("\nDIRECTION-WISE RESULTS")
+    for direction, group in df.groupby("direction"):
+        w = int((group["result"] == "WIN").sum())
+        l = int((group["result"] == "LOSS").sum())
+        n = w + l
+        acc = w / n * 100 if n else 0
         print(f"{direction}: {acc:.2f}% ({w} wins / {l} losses)")
+
+    print("Report saved:", OUTPUT_FILE)
 
 
 if __name__ == "__main__":
