@@ -6,6 +6,13 @@ import pandas as pd
 import yfinance as yf
 import requests
 
+from daily_messages import (
+    GOOD_NIGHT_MESSAGE,
+    MORNING_MESSAGE,
+    SCHEDULE_MESSAGE,
+    SESSION_CLOSE_MESSAGE,
+    SESSION_START_MESSAGE,
+)
 from signal_engine import analyze_market
 
 logging.basicConfig(
@@ -33,12 +40,12 @@ SESSION_TIMES = ["09:00", "12:00", "14:00", "18:00", "23:00"]
 MAX_RUNTIME_SECONDS = 75 * 60
 
 
-def send_telegram_message(text: str) -> None:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+def send_telegram_message(text: str) -> bool:
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()
+    chat_id = (os.getenv("TELEGRAM_CHAT_ID") or os.getenv("CHANNEL_ID") or "").strip()
     if not token or not chat_id:
         logger.warning("Telegram credentials missing; skipping message.")
-        return
+        return False
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
@@ -50,8 +57,15 @@ def send_telegram_message(text: str) -> None:
         resp = requests.post(url, json=payload, timeout=15)
         if not resp.ok:
             logger.error("Telegram API error (%s): %s", resp.status_code, resp.text)
+            return False
+        return True
     except Exception as exc:
         logger.error("Failed to send Telegram message: %s", exc)
+        return False
+
+
+def send_message(text: str) -> bool:
+    return send_telegram_message(text)
 
 
 def fetch_candles(ticker: str, period: str = "2d", interval: str = "1m") -> pd.DataFrame:
@@ -73,28 +87,28 @@ def fetch_candles(ticker: str, period: str = "2d", interval: str = "1m") -> pd.D
     if not needed.issubset(df.columns):
         return pd.DataFrame()
 
-    df = df[["open", "high", "low", "close"]].dropna()
-    return df
+    return df[["open", "high", "low", "close"]].dropna()
 
 
 def format_signal_message(pair: str, signal: dict, now_ist: datetime) -> str:
-    direction = str(signal.get("direction", "BUY")).strip()
-    score = signal.get("score", "")
-    reasons = signal.get("reasons", [])
+    raw_dir = str(signal.get("direction", "CALL")).strip().upper()
+    direction = "🔴 PUT (DOWN)" if ("PUT" in raw_dir or "DOWN" in raw_dir) else "🟢 CALL (UP)"
 
     lines = [
-        "⚡ <b>LIVE FOREX SIGNAL</b> ⚡",
+        "📊 TRADE SIGNAL SETUP",
         "",
-        "💱 <b>Pair:</b> " + pair,
-        "📊 <b>Direction:</b> " + direction,
-        "⏳ <b>Expiry:</b> 1M",
+        f"PAIR NAME -: {pair}",
+        "",
+        "TIME FRAME -: 1 Minute",
+        "",
+        f"DIRECTION -: {direction}",
+        "",
+        f"🕒 TIME (IST) -: {now_ist.strftime('%H:%M:%S')}",
+        "",
+        "⚠️ MONEY MANAGEMENT RULE:",
+        "Always use proper risk management (Max 2% to 5% of your total capital per trade). Stick to a disciplined martingale plan only if your strategy requires it, and never chase losses blindly! 🚀💰",
     ]
-    if score != "":
-        lines.append("🎯 <b>Score:</b> " + str(score) + "/6")
-    if reasons:
-        lines.append("📌 <b>Confluence:</b> " + ", ".join(str(r) for r in reasons))
-    lines.append("🕒 <b>Time (IST):</b> " + now_ist.strftime("%H:%M:%S"))
-    return chr(10).join(lines)
+    return "\n".join(lines)
 
 
 def run_live_session(mode: str = "SCHEDULED") -> None:
@@ -107,54 +121,63 @@ def run_live_session(mode: str = "SCHEDULED") -> None:
         len(TOP_10_PAIRS),
     )
 
-    header_lines = [
-        "🚀 <b>Session Started (" + mode + ")</b>",
-        "🕒 <b>Time:</b> " + now_ist.strftime("%d %b %Y, %H:%M IST"),
-        "📈 <b>Pairs:</b> " + str(len(TOP_10_PAIRS)) + " Major Forex Pairs",
-    ]
-    send_telegram_message(chr(10).join(header_lines))
+    send_telegram_message(SESSION_START_MESSAGE)
 
     seen_signals = set()
+    sent_count = 0
 
-    while (time.time() - start_ts) < MAX_RUNTIME_SECONDS:
-        loop_ist = datetime.now(IST)
+    try:
+        while (time.time() - start_ts) < MAX_RUNTIME_SECONDS and sent_count < 12:
+            loop_ist = datetime.now(IST)
 
-        for pair, ticker in TOP_10_PAIRS.items():
-            if (time.time() - start_ts) >= MAX_RUNTIME_SECONDS:
-                break
+            for pair, ticker in TOP_10_PAIRS.items():
+                if (time.time() - start_ts) >= MAX_RUNTIME_SECONDS or sent_count >= 12:
+                    break
 
-            try:
-                df = fetch_candles(ticker=ticker, period="2d", interval="1m")
-                if df.empty or len(df) < 100:
-                    continue
+                try:
+                    df = fetch_candles(ticker=ticker, period="2d", interval="1m")
+                    if df.empty or len(df) < 100:
+                        continue
 
-                signal = analyze_market(df)
-                if not signal:
-                    continue
+                    signal = analyze_market(df)
+                    if not signal:
+                        continue
 
-                last_idx = str(df.index[-1])
-                direction = str(signal.get("direction", "")).strip()
-                dedup_key = pair + ":" + last_idx + ":" + direction
+                    last_idx = str(df.index[-1])
+                    direction = str(signal.get("direction", "")).strip()
+                    dedup_key = f"{pair}:{last_idx}:{direction}"
 
-                if dedup_key in seen_signals:
-                    continue
+                    if dedup_key in seen_signals:
+                        continue
 
-                seen_signals.add(dedup_key)
-                msg = format_signal_message(pair, signal, loop_ist)
-                send_telegram_message(msg)
-                logger.info("Sent signal for %s (%s) at %s", pair, direction, last_idx)
+                    seen_signals.add(dedup_key)
+                    msg = format_signal_message(pair, signal, loop_ist)
+                    if send_telegram_message(msg):
+                        sent_count += 1
+                        logger.info("Sent signal #%d for %s (%s) at %s", sent_count, pair, direction, last_idx)
 
-            except Exception as exc:
-                logger.error("Error processing %s (%s): %s", pair, ticker, exc)
+                except Exception as exc:
+                    logger.error("Error processing %s (%s): %s", pair, ticker, exc)
 
-        time.sleep(60)
-
-    logger.info("Session %s finished cleanly.", mode)
+            time.sleep(60)
+    finally:
+        send_telegram_message(SESSION_CLOSE_MESSAGE)
+        logger.info("Session %s finished cleanly.", mode)
 
 
 def main() -> None:
     task = os.getenv("TASK", "").strip().lower()
     force_session = os.getenv("FORCE_SESSION", "").strip()
+
+    if task == "morning_briefing":
+        send_telegram_message(MORNING_MESSAGE)
+        return
+    if task == "daily_schedule":
+        send_telegram_message(SCHEDULE_MESSAGE)
+        return
+    if task == "good_night":
+        send_telegram_message(GOOD_NIGHT_MESSAGE)
+        return
 
     if task == "run_session" or force_session == "1":
         run_live_session(mode="MANUAL")
