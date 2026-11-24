@@ -1,120 +1,68 @@
-
+import time
+import logging
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
-from bot import send_message
-from state import load_state, save_state
+from config import (
+    MAX_SIGNALS_PER_SESSION,
+    SIGNAL_INTERVAL_SECONDS,
+    RETRY_INTERVAL_SECONDS,
+)
+from state import start_session, add_trade, close_session
+from session_messages import (
+    session_start_message,
+    signal_message,
+    session_close_message,
+)
+from session_summary import create_session_summary
 
-IST = ZoneInfo("Asia/Kolkata")
-
-SESSIONS = {
-    "MORNING": "09:00",
-    "MIDDAY": "12:00",
-    "AFTERNOON": "14:00",
-    "EVENING": "18:00",
-    "NIGHT": "23:00",
-}
-
-MAX_SIGNALS = 12
-SIGNAL_INTERVAL_MINUTES = 5
+log = logging.getLogger("session-controller")
 
 
-def check_session_start():
-    now = datetime.now(IST)
-    today = now.strftime("%Y-%m-%d")
-    state = load_state()
+def run_session(session_id, send_message, find_signal):
+    start_session(session_id)
 
-    for session_name, session_time in SESSIONS.items():
-        if now.strftime("%H:%M") != session_time:
+    if not send_message(session_start_message(session_id)):
+        log.error("Session start message failed.")
+
+    sent = 0
+    last_sent_at = 0
+
+    while sent < MAX_SIGNALS_PER_SESSION:
+        if last_sent_at:
+            remaining = SIGNAL_INTERVAL_SECONDS - (time.time() - last_sent_at)
+            if remaining > 0:
+                time.sleep(remaining)
+
+        pair, signal = find_signal()
+
+        if not signal:
+            log.info("No valid setup. Retrying.")
+            time.sleep(RETRY_INTERVAL_SECONDS)
             continue
 
-        key = f"{today}_{session_name}_started"
+        trade = {
+            "pair": pair,
+            "direction": signal["direction"],
+            "score": signal["score"],
+            "time": datetime.now().isoformat(),
+            "reasons": signal["reasons"],
+        }
 
-        if state.get(key):
+        message = signal_message(sent + 1, trade)
+
+        if not send_message(message):
+            time.sleep(RETRY_INTERVAL_SECONDS)
             continue
 
-        send_message(
-            "🚀 <b>PROFESSIONAL BOT</b>\n\n"
-            f"✅ <b>{session_name} SESSION STARTED</b>\n"
-            f"🕒 Time: <b>{session_time} IST</b>\n"
-            f"📊 Maximum signals: <b>{MAX_SIGNALS}</b>\n"
-            "⚠️ Only verified market signals will be sent."
-        )
+        if not add_trade(session_id, trade):
+            log.error("State update failed.")
+            break
 
-        state[key] = True
-        state[f"{today}_{session_name}_count"] = 0
-        save_state(state)
+        sent += 1
+        last_sent_at = time.time()
+        log.info("Signal %d/%d sent", sent, MAX_SIGNALS_PER_SESSION)
 
+    close_session(session_id)
 
-def get_active_session(now=None):
-    now = now or datetime.now(IST)
-    today = now.strftime("%Y-%m-%d")
-
-    for session_name, session_time in SESSIONS.items():
-        start = datetime.strptime(
-            session_time, "%H:%M"
-        ).replace(
-            year=now.year,
-            month=now.month,
-            day=now.day,
-            tzinfo=IST,
-        )
-
-        elapsed = (now - start).total_seconds()
-
-        if 0 <= elapsed < 60 * SIGNAL_INTERVAL_MINUTES * MAX_SIGNALS:
-            return session_name, today
-
-    return None, today
-
-
-def can_send_signal():
-    now = datetime.now(IST)
-    session_name, today = get_active_session(now)
-
-    if not session_name:
-        return False
-
-    state = load_state()
-    count_key = f"{today}_{session_name}_count"
-    last_key = f"{today}_{session_name}_last_signal"
-
-    count = int(state.get(count_key, 0))
-
-    if count >= MAX_SIGNALS:
-        return False
-
-    last_time = state.get(last_key)
-
-    if last_time:
-        last_dt = datetime.fromisoformat(last_time)
-        elapsed = (now - last_dt).total_seconds()
-
-        if elapsed < SIGNAL_INTERVAL_MINUTES * 60:
-            return False
-
-    return True
-
-
-def record_signal_sent():
-    now = datetime.now(IST)
-    session_name, today = get_active_session(now)
-
-    if not session_name:
-        raise RuntimeError("No active trading session")
-
-    state = load_state()
-    count_key = f"{today}_{session_name}_count"
-    last_key = f"{today}_{session_name}_last_signal"
-
-    count = int(state.get(count_key, 0))
-
-    if count >= MAX_SIGNALS:
-        raise RuntimeError("Session signal limit reached")
-
-    state[count_key] = count + 1
-    state[last_key] = now.isoformat()
-    save_state(state)
-
-    return count + 1
-
+    summary = create_session_summary(session_id)
+    send_message(session_close_message(sent, summary))
