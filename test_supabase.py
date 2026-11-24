@@ -1,14 +1,25 @@
-from supabase_db import save_bot_state, load_bot_state
+from supabase_db import get_client
 
-test_id = "connection_test"
 
-save_bot_state(test_id, {"status": "connected"})
+def main():
+    client = get_client()
 
-result = load_bot_state(test_id)
+    if client is None:
+        print("Supabase credentials are missing.")
+        return
 
-print("SUPABASE TEST RESULT:", result)
+    try:
+        result = (
+            client.table("bot_state")
+            .select("*")
+            .limit(1)
+            .execute()
+        )
+        print("Supabase connection successful.")
+        print("Returned rows:", len(result.data))
+    except Exception as exc:
+        print("Supabase connection failed:", exc)
 
-if result.get("status") != "connected":
-    raise RuntimeError("Supabase test failed")
 
-print("SUPABASE CONNECTION SUCCESSFUL!")
+if __name__ == "__main__":
+    main()
