@@ -90,3 +90,12 @@ def close_session(session_id):
     session["closed_at"] = datetime.now(TIMEZONE).isoformat()
     _write_session(session_id, session)
     return True
+
+
+def update_session(session_id, session):
+    """Persist non-trade session metadata without changing the signal count."""
+    current = _read_session(session_id)
+    if not current or current.get("closed"):
+        return False
+    _write_session(session_id, session)
+    return True
