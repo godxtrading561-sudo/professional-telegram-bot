@@ -1,4 +1,4 @@
-"""Bounded session runner with persistent duplicate/closed-session protection."""
+"""Bounded session runner with persistent closed-session protection."""
 import logging
 import time
 from datetime import datetime
@@ -10,7 +10,7 @@ from config import (
     SESSION_MAX_RUNTIME_SECONDS,
     TIMEZONE,
 )
-from state import start_session, get_session, add_trade, close_session
+from state import start_session, get_session, add_trade, close_session, update_session
 from session_messages import session_start_message, signal_message, session_close_message
 from session_summary import create_session_summary
 
@@ -23,24 +23,25 @@ def run_session(session_id, send_message, find_signal):
         log.info("Session %s is already closed/inactive; refusing to send.", session_id)
         return False
 
-    # Persisted count is authoritative after a restart.
     sent = int(session.get("signals_sent", len(session.get("trades", []))))
     if sent >= MAX_SIGNALS_PER_SESSION:
         close_session(session_id)
         return False
 
     if not session.get("start_message_sent"):
-        if send_message(session_start_message(session_id)):
-            session["start_message_sent"] = True
-            # add_trade only persists trades; use a dedicated state update.
-            from state import update_session
-            update_session(session_id, session)
-        else:
-            log.error("Session start message failed; continuing cautiously.")
+        if not send_message(session_start_message(session_id)):
+            log.error("Could not send session start; aborting to avoid confusing channel state.")
+            close_session(session_id)
+            return False
+        session["start_message_sent"] = True
+        if not update_session(session_id, session):
+            log.error("Could not persist session-start marker; aborting.")
+            close_session(session_id)
+            return False
 
     started_at = time.monotonic()
     last_sent_at = 0.0
-    close_reason = "Session limit reached"
+    close_reason = "Signal limit reached"
 
     try:
         while sent < MAX_SIGNALS_PER_SESSION:
@@ -49,38 +50,49 @@ def run_session(session_id, send_message, find_signal):
                 close_reason = "Session was externally closed"
                 break
 
-            if time.monotonic() - started_at >= SESSION_MAX_RUNTIME_SECONDS:
+            elapsed = time.monotonic() - started_at
+            remaining_runtime = SESSION_MAX_RUNTIME_SECONDS - elapsed
+            if remaining_runtime <= 0:
                 close_reason = "Maximum session runtime reached"
-                log.warning(close_reason)
                 break
 
             if last_sent_at:
-                remaining = SIGNAL_INTERVAL_SECONDS - (time.monotonic() - last_sent_at)
-                if remaining > 0:
-                    time.sleep(min(remaining, SESSION_MAX_RUNTIME_SECONDS))
+                wait_for_signal = SIGNAL_INTERVAL_SECONDS - (time.monotonic() - last_sent_at)
+                if wait_for_signal > 0:
+                    time.sleep(min(wait_for_signal, remaining_runtime))
+                if time.monotonic() - started_at >= SESSION_MAX_RUNTIME_SECONDS:
+                    close_reason = "Maximum session runtime reached"
+                    break
 
             pair, signal = find_signal()
             if not signal:
-                log.info("No valid setup; retrying in %s seconds.", RETRY_INTERVAL_SECONDS)
-                time.sleep(RETRY_INTERVAL_SECONDS)
+                remaining_runtime = SESSION_MAX_RUNTIME_SECONDS - (time.monotonic() - started_at)
+                if remaining_runtime <= 0:
+                    close_reason = "Maximum session runtime reached"
+                    break
+                time.sleep(min(RETRY_INTERVAL_SECONDS, remaining_runtime))
+                continue
+
+            if signal.get("direction") not in ("CALL", "PUT"):
+                log.warning("Ignoring invalid direction: %r", signal.get("direction"))
                 continue
 
             trade = {
                 "pair": pair,
                 "direction": signal["direction"],
-                "score": signal["score"],
+                "score": signal.get("score"),
                 "time": datetime.now(TIMEZONE).isoformat(),
                 "reasons": signal.get("reasons", []),
+                "result": "PENDING",
             }
 
             if not send_message(signal_message(sent + 1, trade)):
-                log.error("Signal delivery failed; will retry without incrementing count.")
-                time.sleep(RETRY_INTERVAL_SECONDS)
+                log.error("Signal delivery failed; retrying without incrementing count.")
+                time.sleep(min(RETRY_INTERVAL_SECONDS, max(0, SESSION_MAX_RUNTIME_SECONDS - (time.monotonic() - started_at))))
                 continue
 
-            # If persistence fails after delivery, stop immediately to prevent duplicates.
             if not add_trade(session_id, trade):
-                log.error("Could not persist delivered signal; stopping to avoid overposting.")
+                log.error("Delivered signal could not be persisted; stopping to prevent overposting.")
                 close_reason = "State persistence failed after delivery"
                 break
 
@@ -88,13 +100,17 @@ def run_session(session_id, send_message, find_signal):
             last_sent_at = time.monotonic()
             log.info("Signal %d/%d sent", sent, MAX_SIGNALS_PER_SESSION)
 
-    except KeyboardInterrupt:
-        close_reason = "Session interrupted"
-        log.warning(close_reason)
+    except Exception:
+        close_reason = "Unexpected session error"
+        log.exception("Session %s failed", session_id)
     finally:
-        close_session(session_id)
-        summary = create_session_summary(session_id)
-        send_message(session_close_message(sent, summary))
+        try:
+            close_session(session_id)
+            summary = create_session_summary(session_id)
+            if not send_message(session_close_message(sent, summary)):
+                log.error("Could not deliver session-close message.")
+        except Exception:
+            log.exception("Failed while closing session %s", session_id)
         log.info("Session %s closed: %s", session_id, close_reason)
 
     return True
