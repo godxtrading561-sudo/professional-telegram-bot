@@ -1,5 +1,10 @@
 name: Professional Telegram Bot
 
+# Prevent overlapping scheduled/manual jobs from sending duplicate signals.
+concurrency:
+  group: professional-telegram-bot-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   workflow_dispatch:
     inputs:
@@ -31,6 +36,7 @@ on:
 jobs:
   bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 100
     timeout-minutes: 360
     steps:
       - name: Checkout
