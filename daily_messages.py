@@ -1,10 +1,11 @@
+"""Daily Telegram message templates and scheduler-compatible names."""
 
 DAILY_MESSAGES = {
     "morning": """🌅 RISE AND SHINE TRADERS! ☕🔥
 
 🌟 MORNING BRIEFING & FOCUS
 
-"Consistency is the bridge between goals and wealth." 💎📈
+\"Consistency is the bridge between goals and wealth.\" 💎📈
 
 🎯 MINDSET -: Calm, Focused & Disciplined
 ⚠️ REMINDER -: Never chase losses. Protect capital first!
@@ -31,7 +32,7 @@ DAILY_MESSAGES = {
 
 💤 END OF DAY WRAP-UP
 
-"Discipline today brings financial freedom tomorrow." 💎📈
+\"Discipline today brings financial freedom tomorrow.\" 💎📈
 
 📊 TODAY'S STATUS -:
 Market Closed / Sessions Completed
@@ -40,5 +41,10 @@ Market Closed / Sessions Completed
 
 🛡️ REMINDER -: Protect your peace and your capital. Tomorrow is a new opportunity!
 
-⭐ Sleep tight and get ready for another massive green day ahead! Good night, traders! 🚀"""
+⭐ Sleep tight and get ready for another massive green day ahead! Good night, traders! 🚀""",
 }
+
+# Backward-compatible names for any older imports.
+MORNING_MESSAGE = DAILY_MESSAGES["morning"]
+SCHEDULE_MESSAGE = DAILY_MESSAGES["schedule"]
+GOOD_NIGHT_MESSAGE = DAILY_MESSAGES["good_night"]
