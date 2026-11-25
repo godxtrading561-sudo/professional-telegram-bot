@@ -14,19 +14,24 @@ on:
           - backtest
           - test_supabase
           - run_session
+          - daily_messages
 
   schedule:
+    # Trading sessions: 09:00, 12:00, 14:00, 18:00, 23:00 IST
     - cron: "30 3 * * *"
     - cron: "30 6 * * *"
     - cron: "30 8 * * *"
     - cron: "30 12 * * *"
     - cron: "30 17 * * *"
+    # Daily messages: 00:00, 07:00, 08:00 IST
+    - cron: "30 18 * * *"
+    - cron: "30 1 * * *"
+    - cron: "30 2 * * *"
 
 jobs:
   bot:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,6 +40,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Setup Node.js for historical data downloader
+        if: github.event_name == 'workflow_dispatch' && inputs.task == 'download_data'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - name: Install requirements
         run: |
@@ -47,9 +58,9 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
         run: |
-          python -c "import os,requests; r=requests.post('https://api.telegram.org/bot'+os.environ['BOT_TOKEN']+'/sendMessage',json={'chat_id':os.environ['CHANNEL_ID'],'text':'PROFESSIONAL BOT CONNECTED'},timeout=20); r.raise_for_status(); print(r.json())"
+          python -c "import os,requests; r=requests.post('https://api.telegram.org/bot'+os.environ['BOT_TOKEN']+'/sendMessage',json={'chat_id':os.environ['CHANNEL_ID'],'text':'PROFESSIONAL BOT CONNECTED'},timeout=20); r.raise_for_status(); print('Telegram test successful')"
 
-      - name: Download candles
+      - name: Download historical SPOT candles
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'download_data'
         run: python download_data.py
 
@@ -64,19 +75,30 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python test_supabase.py
 
-      - name: Run session
+      - name: Run manual session
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'run_session'
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python bot.py
 
-      - name: Run scheduled session
-        if: github.event_name == 'schedule'
+      - name: Run scheduled trading session
+        if: github.event_name == 'schedule' && github.event.schedule != '30 18 * * *' && github.event.schedule != '30 1 * * *' && github.event.schedule != '30 2 * * *'
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python bot.py
+
+      - name: Send daily scheduled message
+        if: (github.event_name == 'schedule' && (github.event.schedule == '30 18 * * *' || github.event.schedule == '30 1 * * *' || github.event.schedule == '30 2 * * *')) || (github.event_name == 'workflow_dispatch' && inputs.task == 'daily_messages')
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+        run: python scheduler.py
 
       - name: Upload backtest report
         if: always()
@@ -86,10 +108,10 @@ jobs:
           path: backtest_trades.csv
           if-no-files-found: ignore
 
-      - name: Upload candle data
+      - name: Upload downloaded spot candles
         if: always() && github.event_name == 'workflow_dispatch' && inputs.task == 'download_data'
         uses: actions/upload-artifact@v4
         with:
-          name: candle-data
-          path: data/
-          if-no-files-found: ignore
+          name: candle-data-spot
+          path: data/*_spot.csv
+          if-no-files-found: warn
