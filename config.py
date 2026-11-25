@@ -1,3 +1,4 @@
+
 import os
 from datetime import time
 from zoneinfo import ZoneInfo
@@ -14,6 +15,14 @@ MAX_SIGNALS_PER_SESSION = 12
 SIGNAL_INTERVAL_SECONDS = 300
 RETRY_INTERVAL_SECONDS = 30
 
+# Daily automatic messages (Indian Standard Time)
+DAILY_MESSAGES = {
+    "morning": time(7, 0),
+    "schedule": time(8, 0),
+    "good_night": time(0, 0),
+}
+
+# Trading sessions (Indian Standard Time)
 TRADING_SESSIONS = [
     time(9, 0),
     time(12, 0),
