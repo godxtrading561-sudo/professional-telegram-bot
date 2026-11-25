@@ -14,6 +14,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 MAX_SIGNALS_PER_SESSION = 12
 SIGNAL_INTERVAL_SECONDS = 300
 RETRY_INTERVAL_SECONDS = 30
+SESSION_MAX_RUNTIME_SECONDS = 90 * 60  # Stop safely if no valid setups appear.
 
 # Daily automatic messages (Indian Standard Time)
 DAILY_MESSAGES = {
