@@ -1,3 +1,4 @@
+"""Daily Telegram message templates and scheduler-compatible names."""
 
 DAILY_MESSAGES = {
     "morning": """🌅 RISE AND SHINE TRADERS! ☕🔥
@@ -9,7 +10,8 @@ DAILY_MESSAGES = {
 🎯 MINDSET -: Calm, Focused & Disciplined
 ⚠️ REMINDER -: Never chase losses. Protect capital first!
 
-🚀 MISSION -: Follow the signals, execute with precision, and secure the profits.""",
+🚀 MISSION -: Follow the signals, execute with precision, and secure the profits.
+💻 TERMINALS READY — STAY PURE GREEN!""",
 
     "schedule": """👑 TODAY BOT SESSION SCHEDULE 👑
 
@@ -40,5 +42,9 @@ Market Closed / Sessions Completed
 
 🛡️ REMINDER -: Protect your peace and your capital. Tomorrow is a new opportunity!
 
-⭐ Sleep tight and get ready for another massive green day ahead! Good night, traders! 🚀"""
+⭐ Sleep tight and get ready for another massive green day ahead! Good night, traders! 🚀""",
 }
+
+MORNING_MESSAGE = DAILY_MESSAGES["morning"]
+SCHEDULE_MESSAGE = DAILY_MESSAGES["schedule"]
+GOOD_NIGHT_MESSAGE = DAILY_MESSAGES["good_night"]
