@@ -1,5 +1,11 @@
 import logging
+import os
+import tempfile
 from datetime import datetime
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 import requests
 
@@ -30,6 +36,46 @@ def send_message(message):
     return False
 
 
+def send_photo(photo_path, caption):
+    """Send a generated OTC chart image with the signal as its caption."""
+    if not BOT_TOKEN or not CHANNEL_ID:
+        raise RuntimeError("BOT_TOKEN or CHANNEL_ID is missing.")
+    try:
+        with open(photo_path, "rb") as photo:
+            response = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                data={"chat_id": CHANNEL_ID, "caption": caption, "parse_mode": "HTML"},
+                files={"photo": photo},
+                timeout=40,
+            )
+        data = response.json()
+        if response.ok and data.get("ok"):
+            return True
+        log.error("Telegram sendPhoto error: %s", data)
+    except (OSError, requests.RequestException):
+        log.exception("Telegram photo delivery failed")
+    return False
+
+
+def make_signal_chart(candles, symbol):
+    """Create a compact chart from the same completed OTC candles used by strategy."""
+    recent = candles.tail(60)
+    fig, ax = plt.subplots(figsize=(10, 5), dpi=140)
+    ax.plot(recent["timestamp"], recent["close"], linewidth=1.8, label="Close")
+    ax.set_title(f"{symbol} OTC — 1 Minute")
+    ax.set_xlabel("UTC")
+    ax.set_ylabel("Price")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="best")
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fd, path = tempfile.mkstemp(prefix="otc_signal_", suffix=".png")
+    os.close(fd)
+    fig.savefig(path, format="png")
+    plt.close(fig)
+    return path
+
+
 def fetch_candles(symbol):
     try:
         return fetch_quotex_candles(symbol)
@@ -45,6 +91,10 @@ def find_signal():
             continue
         signal = analyze_market(candles)
         if signal:
+            try:
+                signal["chart_path"] = make_signal_chart(candles, symbol)
+            except Exception:
+                log.exception("Could not render OTC chart for %s", symbol)
             return pair, signal
     return None, None
 
@@ -54,7 +104,7 @@ def main():
         raise RuntimeError("OTCHARTS_API_KEY is missing; refusing to use non-OTC fallback data.")
     now = datetime.now(TIMEZONE)
     session_id = now.strftime("%Y-%m-%d-%H-%M")
-    run_session(session_id=session_id, send_message=send_message, find_signal=find_signal)
+    run_session(session_id=session_id, send_message=send_message, find_signal=find_signal, send_photo=send_photo)
 
 
 if __name__ == "__main__":
