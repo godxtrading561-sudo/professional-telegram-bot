@@ -5,12 +5,13 @@ DAILY_MESSAGES = {
 
 🌟 MORNING BRIEFING & FOCUS
 
-\"Consistency is the bridge between goals and wealth.\" 💎📈
+"Consistency is the bridge between goals and wealth." 💎📈
 
 🎯 MINDSET -: Calm, Focused & Disciplined
 ⚠️ REMINDER -: Never chase losses. Protect capital first!
 
-🚀 MISSION -: Follow the signals, execute with precision, and secure the profits.""",
+🚀 MISSION -: Follow the signals, execute with precision, and secure the profits.
+💻 TERMINALS READY — STAY PURE GREEN!""",
 
     "schedule": """👑 TODAY BOT SESSION SCHEDULE 👑
 
@@ -24,7 +25,7 @@ DAILY_MESSAGES = {
 
 🌇 4th Session -: 06:00 PM
 
-🌙 5th Session -: 10:00 PM
+🌙 5th Session -: 11:00 PM
 
 ⚠️ IMPORTANT NOTE: Be online 5 minutes before the session time! Follow strict money management and protect your capital. 🚀💰""",
 
@@ -32,7 +33,7 @@ DAILY_MESSAGES = {
 
 💤 END OF DAY WRAP-UP
 
-\"Discipline today brings financial freedom tomorrow.\" 💎📈
+"Discipline today brings financial freedom tomorrow." 💎📈
 
 📊 TODAY'S STATUS -:
 Market Closed / Sessions Completed
@@ -44,7 +45,6 @@ Market Closed / Sessions Completed
 ⭐ Sleep tight and get ready for another massive green day ahead! Good night, traders! 🚀""",
 }
 
-# Backward-compatible names for any older imports.
 MORNING_MESSAGE = DAILY_MESSAGES["morning"]
 SCHEDULE_MESSAGE = DAILY_MESSAGES["schedule"]
 GOOD_NIGHT_MESSAGE = DAILY_MESSAGES["good_night"]
