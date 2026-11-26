@@ -1,4 +1,4 @@
-"""Persistent session state backed by Supabase, with local JSON fallback for development."""
+"""Persistent session state backed by Supabase, with local JSON fallback."""
 import json
 import os
 from datetime import datetime
@@ -47,16 +47,9 @@ def _write_session(session_id, session):
 def start_session(session_id):
     existing = _read_session(session_id)
     if existing:
-        # Never reopen a previously closed session or reset its signal count.
         return existing
-
-    session = {
-        "active": True,
-        "closed": False,
-        "signals_sent": 0,
-        "trades": [],
-        "started_at": datetime.now(TIMEZONE).isoformat(),
-    }
+    session = {"active": True, "closed": False, "signals_sent": 0, "trades": [],
+               "started_at": datetime.now(TIMEZONE).isoformat()}
     _write_session(session_id, session)
     return session
 
@@ -69,13 +62,27 @@ def add_trade(session_id, trade):
     session = _read_session(session_id)
     if not session or not session.get("active") or session.get("closed"):
         return False
-
     trades = session.setdefault("trades", [])
     if int(session.get("signals_sent", len(trades))) >= MAX_SIGNALS_PER_SESSION:
         return False
-
     trades.append(trade)
     session["signals_sent"] = len(trades)
+    _write_session(session_id, session)
+    return True
+
+
+def update_trade_result(session_id, trade_index, result):
+    session = _read_session(session_id)
+    if not session:
+        return False
+    trades = session.get("trades", [])
+    if trade_index < 0 or trade_index >= len(trades):
+        return False
+    trade = trades[trade_index]
+    if trade.get("result") != "PENDING":
+        return True
+    trade.update(result)
+    trade["result_updated_at"] = datetime.now(TIMEZONE).isoformat()
     _write_session(session_id, session)
     return True
 
@@ -84,7 +91,6 @@ def close_session(session_id):
     session = _read_session(session_id)
     if not session:
         return False
-
     session["active"] = False
     session["closed"] = True
     session["closed_at"] = datetime.now(TIMEZONE).isoformat()
@@ -93,7 +99,6 @@ def close_session(session_id):
 
 
 def update_session(session_id, session):
-    """Persist non-trade session metadata without changing the signal count."""
     current = _read_session(session_id)
     if not current or current.get("closed"):
         return False
