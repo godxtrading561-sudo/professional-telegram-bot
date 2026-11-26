@@ -17,18 +17,17 @@ SCHEDULE_GRACE_MINUTES = 2
 RESULT_EXPIRY_SECONDS = 60
 
 DAILY_MESSAGES = {"morning": time(7, 0), "schedule": time(8, 0), "good_night": time(0, 0)}
-TRADING_SESSIONS = [time(9, 0), time(12, 0), time(14, 0), time(18, 0), time(22, 0)]
+TRADING_SESSIONS = [time(9, 0), time(12, 0), time(14, 0), time(18, 0), time(23, 0)]
 MIN_CANDLES = 60
 MIN_SIGNAL_SCORE = 4
 
-# These are actual Quotex OTC symbols, not Yahoo/regular FX tickers.
+# Quotex OTC symbols supported by the selected data feed.
 TRADING_PAIRS = {
     "EURUSD_otc": "EURUSD_otc",
     "GBPUSD_otc": "GBPUSD_otc",
     "USDJPY_otc": "USDJPY_otc",
-    "AUDCAD_otc": "AUDCAD_otc",
-    "EURJPY_otc": "EURJPY_otc",
-    "GBPJPY_otc": "GBPJPY_otc",
+    "AUDUSD_otc": "AUDUSD_otc",
+    "BTCUSD_otc": "BTCUSD_otc",
 }
 DATA_FOLDER = "data"
 REPORT_FOLDER = "reports"
