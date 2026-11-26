@@ -99,9 +99,34 @@ def find_signal():
     return None, None
 
 
-def main():
-    if not __import__("os").getenv("OTCHARTS_API_KEY", "").strip():
+def preflight_otc_feed():
+    """Verify live OTC access before announcing or opening a trading session."""
+    if not os.getenv("OTCHARTS_API_KEY", "").strip():
         raise RuntimeError("OTCHARTS_API_KEY is missing; refusing to use non-OTC fallback data.")
+    last_error = None
+    for pair, symbol in TRADING_PAIRS.items():
+        try:
+            candles = fetch_quotex_candles(symbol, limit=120)
+            if candles is not None and len(candles) >= 60:
+                log.info("OTCharts preflight passed for %s (%d candles).", symbol, len(candles))
+                return True
+        except CandleFeedError as exc:
+            last_error = exc
+            if "402" in str(exc):
+                raise RuntimeError(
+                    "Trading session safely blocked: OTCharts returned HTTP 402. "
+                    "The configured account plan does not currently provide this OTC feed. "
+                    "No session announcement or trading signal was sent."
+                ) from exc
+            log.warning("OTC preflight unavailable for %s: %s", symbol, exc)
+    raise RuntimeError(
+        f"Trading session safely blocked: no usable Quotex OTC feed was found. "
+        f"No session announcement or trading signal was sent. Last error: {last_error}"
+    )
+
+
+def main():
+    preflight_otc_feed()
     now = datetime.now(TIMEZONE)
     scheduled_cron = os.getenv("SESSION_SCHEDULE_CRON", "").strip()
     cron_to_ist = {
