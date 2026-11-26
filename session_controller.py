@@ -78,7 +78,7 @@ def run_session(session_id, send_message, find_signal):
 
             # One expiry check, not a rapid polling loop. If feed lacks the exact
             # expiry candle, retain PENDING rather than inventing a result.
-            time.sleep(65)
+            time.sleep(125)
             try:
                 candles = fetch_quotex_candles(pair, limit=360)
                 result = evaluate_one_minute_result(trade["direction"], signal_time, candles)
