@@ -1,5 +1,6 @@
 """Bounded session runner with verified one-minute OTC result evaluation."""
 import logging
+import os
 import time
 from datetime import datetime, timezone
 
@@ -12,7 +13,7 @@ from quotex_data import fetch_quotex_candles, evaluate_one_minute_result, Candle
 log = logging.getLogger("session-controller")
 
 
-def run_session(session_id, send_message, find_signal):
+def run_session(session_id, send_message, find_signal, send_photo=None):
     session = start_session(session_id)
     if not session or session.get("closed") or not session.get("active"):
         log.info("Session %s is already closed/inactive; refusing to send.", session_id)
@@ -62,7 +63,17 @@ def run_session(session_id, send_message, find_signal):
             signal_time = datetime.now(timezone.utc).isoformat()
             trade = {"pair": pair, "direction": signal["direction"], "score": signal.get("score"),
                      "time": signal_time, "reasons": signal.get("reasons", []), "result": "PENDING"}
-            if not send_message(signal_message(sent + 1, trade)):
+            caption = signal_message(sent + 1, trade)
+            chart_path = signal.get("chart_path")
+            if chart_path and send_photo:
+                delivered = send_photo(chart_path, caption)
+                try:
+                    os.remove(chart_path)
+                except OSError:
+                    pass
+            else:
+                delivered = send_message(caption)
+            if not delivered:
                 log.error("Signal delivery failed; not recording it.")
                 time.sleep(RETRY_INTERVAL_SECONDS)
                 continue
