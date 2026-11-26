@@ -12,7 +12,7 @@ on:
         required: true
         default: telegram_test
         type: choice
-        options: [telegram_test, download_data, backtest, test_supabase, run_session, daily_messages]
+        options: [telegram_test, download_data, test_supabase, run_session, daily_messages]
   schedule:
     - cron: "30 3 * * *"
     - cron: "30 6 * * *"
@@ -51,9 +51,6 @@ jobs:
       - name: Download historical SPOT candles
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'download_data'
         run: python download_data.py
-      - name: Run backtest
-        if: github.event_name == 'workflow_dispatch' && inputs.task == 'backtest'
-        run: python backtest.py
       - name: Test Supabase
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'test_supabase'
         env:
