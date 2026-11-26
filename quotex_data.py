@@ -97,12 +97,11 @@ def evaluate_one_minute_result(direction, signal_time, candles):
     if candidates.empty:
         return None
     entry = candidates.iloc[0]
-    expiry_time = entry.timestamp + pd.Timedelta(minutes=1)
-    expiry = df[df.timestamp == expiry_time]
-    if expiry.empty:
-        return None
+    # A one-minute contract entered at this candle's open expires at
+    # the close of that same one-minute candle (not the following candle).
     entry_price = float(entry.open)
-    exit_price = float(expiry.iloc[0].close)
+    exit_price = float(entry.close)
+    expiry_time = entry.timestamp + pd.Timedelta(minutes=1)
     if exit_price == entry_price:
         status = "TIE"
     elif (direction == "CALL" and exit_price > entry_price) or (direction == "PUT" and exit_price < entry_price):
