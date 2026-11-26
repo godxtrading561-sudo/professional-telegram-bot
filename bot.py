@@ -103,7 +103,19 @@ def main():
     if not __import__("os").getenv("OTCHARTS_API_KEY", "").strip():
         raise RuntimeError("OTCHARTS_API_KEY is missing; refusing to use non-OTC fallback data.")
     now = datetime.now(TIMEZONE)
-    session_id = now.strftime("%Y-%m-%d-%H-%M")
+    scheduled_cron = os.getenv("SESSION_SCHEDULE_CRON", "").strip()
+    cron_to_ist = {
+        "30 3 * * *": (9, 0),
+        "30 6 * * *": (12, 0),
+        "30 8 * * *": (14, 0),
+        "30 12 * * *": (18, 0),
+        "30 16 * * *": (22, 0),
+    }
+    if scheduled_cron in cron_to_ist:
+        hour, minute = cron_to_ist[scheduled_cron]
+        session_id = now.strftime("%Y-%m-%d-") + f"{hour:02d}-{minute:02d}"
+    else:
+        session_id = now.strftime("%Y-%m-%d-%H-%M")
     run_session(session_id=session_id, send_message=send_message, find_signal=find_signal, send_photo=send_photo)
 
 
