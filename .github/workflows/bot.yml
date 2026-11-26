@@ -1,6 +1,14 @@
 name: Professional Telegram Bot
 
-on:
+concurrency:
+  group: professional-telegram-bot-${{ github.ref }}
+  cancel-in-progress: false
+
+"on":
+  push:
+    branches: [bot-repair]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       task:
@@ -8,88 +16,111 @@ on:
         required: true
         default: telegram_test
         type: choice
-        options:
-          - telegram_test
-          - download_data
-          - backtest
-          - test_supabase
-          - run_session
-
+        options: [telegram_test, test_otcharts, download_data, backtest, test_supabase, run_session, daily_messages]
   schedule:
     - cron: "30 3 * * *"
     - cron: "30 6 * * *"
     - cron: "30 8 * * *"
     - cron: "30 12 * * *"
     - cron: "30 17 * * *"
+    - cron: "30 18 * * *"
+    - cron: "30 1 * * *"
+    - cron: "30 2 * * *"
 
 jobs:
-  bot:
+  validate:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install requirements
+        run: python -m pip install -r requirements.txt
+      - name: Compile Python files
+        run: python -m compileall -q .
+      - name: Import critical bot modules
+        run: python -c "import config, quotex_data, signal_engine, state, session_controller, scheduler, bot; print('Bot modules imported successfully')"
 
+  bot:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Install requirements
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
       - name: Telegram test
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'telegram_test'
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
         run: |
-          python -c "import os,requests; r=requests.post('https://api.telegram.org/bot'+os.environ['BOT_TOKEN']+'/sendMessage',json={'chat_id':os.environ['CHANNEL_ID'],'text':'PROFESSIONAL BOT CONNECTED'},timeout=20); r.raise_for_status(); print(r.json())"
-
-      - name: Download candles
+          python -c "import os,requests; r=requests.post('https://api.telegram.org/bot'+os.environ['BOT_TOKEN']+'/sendMessage',json={'chat_id':os.environ['CHANNEL_ID'],'text':'PROFESSIONAL BOT CONNECTED'},timeout=20); r.raise_for_status(); print('Telegram test successful')"
+      - name: Test OTCharts OTC feed
+        if: github.event_name == 'workflow_dispatch' && inputs.task == 'test_otcharts'
+        env:
+          OTCHARTS_API_KEY: ${{ secrets.OTCHARTS_API_KEY }}
+        run: python test_otcharts.py
+      - name: Download historical SPOT candles
+        if: github.event_name == 'workflow_dispatch' && inputs.task == 'download_data'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run historical SPOT downloader
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'download_data'
         run: python download_data.py
-
-      - name: Run backtest
+      - name: Run historical strategy backtest
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'backtest'
         run: python backtest.py
-
       - name: Test Supabase
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'test_supabase'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python test_supabase.py
-
-      - name: Run session
+      - name: Run manual session
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'run_session'
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          OTCHARTS_API_KEY: ${{ secrets.OTCHARTS_API_KEY }}
         run: python bot.py
-
-      - name: Run scheduled session
-        if: github.event_name == 'schedule'
+      - name: Run scheduled trading session
+        if: github.event_name == 'schedule' && github.event.schedule != '30 18 * * *' && github.event.schedule != '30 1 * * *' && github.event.schedule != '30 2 * * *'
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          OTCHARTS_API_KEY: ${{ secrets.OTCHARTS_API_KEY }}
+          SESSION_SCHEDULE_CRON: ${{ github.event.schedule }}
         run: python bot.py
-
+      - name: Send daily scheduled message
+        if: (github.event_name == 'schedule' && (github.event.schedule == '30 18 * * *' || github.event.schedule == '30 1 * * *' || github.event.schedule == '30 2 * * *')) || (github.event_name == 'workflow_dispatch' && inputs.task == 'daily_messages')
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+        run: python scheduler.py
       - name: Upload backtest report
-        if: always()
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.task == 'backtest'
         uses: actions/upload-artifact@v4
         with:
-          name: backtest-report
+          name: strategy-backtest-report
           path: backtest_trades.csv
-          if-no-files-found: ignore
-
-      - name: Upload candle data
+          if-no-files-found: warn
+      - name: Upload downloaded spot candles
         if: always() && github.event_name == 'workflow_dispatch' && inputs.task == 'download_data'
         uses: actions/upload-artifact@v4
         with:
-          name: candle-data
-          path: data/
-          if-no-files-found: ignore
+          name: candle-data-spot
+          path: data/*_spot.csv
+          if-no-files-found: warn
