@@ -42,6 +42,7 @@ jobs:
         run: python -c "import config, quotex_data, signal_engine, state, session_controller, scheduler, bot; print('Bot modules imported successfully')"
 
   bot:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 100
     steps:
@@ -99,13 +100,6 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
         run: python scheduler.py
-      - name: Upload backtest report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backtest-report
-          path: backtest_trades.csv
-          if-no-files-found: ignore
       - name: Upload downloaded spot candles
         if: always() && github.event_name == 'workflow_dispatch' && inputs.task == 'download_data'
         uses: actions/upload-artifact@v4
