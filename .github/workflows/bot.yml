@@ -7,6 +7,8 @@ concurrency:
 "on":
   push:
     branches: [bot-repair]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       task:
@@ -27,7 +29,7 @@ concurrency:
 
 jobs:
   validate:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +44,7 @@ jobs:
         run: python -c "import config, quotex_data, signal_engine, state, session_controller, scheduler, bot; print('Bot modules imported successfully')"
 
   bot:
-    if: github.event_name != 'push'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 100
     steps:
