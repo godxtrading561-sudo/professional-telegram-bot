@@ -71,6 +71,10 @@ def run_session(session_id, send_message, find_signal, send_photo=None):
                     os.remove(chart_path)
                 except OSError:
                     pass
+                # Preserve the signal if Telegram rejects the image upload.
+                if not delivered:
+                    log.warning("Photo delivery failed; falling back to text signal.")
+                    delivered = send_message(caption)
             else:
                 delivered = send_message(caption)
             if not delivered:
