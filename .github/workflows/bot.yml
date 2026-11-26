@@ -14,7 +14,7 @@ concurrency:
         required: true
         default: telegram_test
         type: choice
-        options: [telegram_test, download_data, test_supabase, run_session, daily_messages]
+        options: [telegram_test, test_otcharts, download_data, test_supabase, run_session, daily_messages]
   schedule:
     - cron: "30 3 * * *"
     - cron: "30 6 * * *"
@@ -66,6 +66,11 @@ jobs:
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
         run: |
           python -c "import os,requests; r=requests.post('https://api.telegram.org/bot'+os.environ['BOT_TOKEN']+'/sendMessage',json={'chat_id':os.environ['CHANNEL_ID'],'text':'PROFESSIONAL BOT CONNECTED'},timeout=20); r.raise_for_status(); print('Telegram test successful')"
+      - name: Test OTCharts OTC feed
+        if: github.event_name == 'workflow_dispatch' && inputs.task == 'test_otcharts'
+        env:
+          OTCHARTS_API_KEY: ${{ secrets.OTCHARTS_API_KEY }}
+        run: python test_otcharts.py
       - name: Download historical SPOT candles
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'download_data'
         run: python download_data.py
