@@ -1,7 +1,9 @@
-import os
+"""Historical one-candle-expiry backtest; uses next candle open and close."""
 import glob
+import os
 import pandas as pd
 
+from config import MIN_CANDLES
 from signal_engine import analyze_market, prepare_candles
 
 DATA_FOLDER = "data"
@@ -12,13 +14,13 @@ def backtest_file(path):
     df = prepare_candles(pd.read_csv(path))
     trades = []
 
-    for i in range(200, len(df) - 2):
+    # Signal is formed at candle i close; entry/expiry are the following candle.
+    for i in range(MIN_CANDLES - 1, len(df) - 1):
         signal = analyze_market(df.iloc[:i + 1])
-
         if not signal:
             continue
 
-        entry_candle = df.iloc[i + 2]
+        entry_candle = df.iloc[i + 1]
         entry = float(entry_candle["open"])
         exit_price = float(entry_candle["close"])
 
@@ -29,26 +31,27 @@ def backtest_file(path):
         else:
             result = "WIN" if exit_price < entry else "LOSS"
 
-        trades.append({
-            "pair": os.path.basename(path).replace(".csv", ""),
+        trade = {
+            "pair": os.path.basename(path).rsplit(".", 1)[0],
+            "signal_candle": str(df.iloc[i].get("timestamp", i)),
+            "expiry_candle": str(entry_candle.get("timestamp", i + 1)),
             "direction": signal["direction"],
             "score": signal["score"],
             "entry": entry,
             "exit": exit_price,
             "result": result,
-        })
+        }
+        trades.append(trade)
 
     return trades
 
 
 def main():
-    files = glob.glob(os.path.join(DATA_FOLDER, "*.csv"))
-
+    files = sorted(glob.glob(os.path.join(DATA_FOLDER, "*.csv")))
     if not files:
         raise SystemExit("No candle CSV files found in data/.")
 
     all_trades = []
-
     for path in files:
         print("Testing", path)
         all_trades.extend(backtest_file(path))
@@ -59,13 +62,11 @@ def main():
 
     df = pd.DataFrame(all_trades)
     df.to_csv(OUTPUT_FILE, index=False)
-
     wins = int((df["result"] == "WIN").sum())
     losses = int((df["result"] == "LOSS").sum())
     ties = int((df["result"] == "TIE").sum())
-
     decisive = wins + losses
-    accuracy = wins / decisive * 100 if decisive else 0
+    accuracy = wins / decisive * 100 if decisive else 0.0
 
     print("\n========== BACKTEST REPORT ==========")
     print("Total signals:", len(df))
@@ -73,23 +74,18 @@ def main():
     print("Losses:", losses)
     print("Ties:", ties)
     print(f"Accuracy excluding ties: {accuracy:.2f}%")
-
     print("\nPAIR-WISE RESULTS")
     for pair, group in df.groupby("pair"):
         w = int((group["result"] == "WIN").sum())
         l = int((group["result"] == "LOSS").sum())
         n = w + l
-        acc = w / n * 100 if n else 0
-        print(f"{pair}: {acc:.2f}% ({w} wins / {l} losses)")
-
+        print(f"{pair}: {w / n * 100:.2f}% ({w} wins / {l} losses)" if n else f"{pair}: no decisive trades")
     print("\nDIRECTION-WISE RESULTS")
     for direction, group in df.groupby("direction"):
         w = int((group["result"] == "WIN").sum())
         l = int((group["result"] == "LOSS").sum())
         n = w + l
-        acc = w / n * 100 if n else 0
-        print(f"{direction}: {acc:.2f}% ({w} wins / {l} losses)")
-
+        print(f"{direction}: {w / n * 100:.2f}% ({w} wins / {l} losses)" if n else f"{direction}: no decisive trades")
     print("Report saved:", OUTPUT_FILE)
 
 
