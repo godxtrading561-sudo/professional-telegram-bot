@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 import requests
 
-from config import BOT_TOKEN, CHANNEL_ID, TIMEZONE, TRADING_PAIRS
+from config import BOT_TOKEN, CHANNEL_ID, TIMEZONE, TRADING_PAIRS, SUPABASE_URL, SUPABASE_KEY
 from quotex_data import fetch_quotex_candles, CandleFeedError
 from signal_engine import analyze_market
 from session_controller import run_session
@@ -100,9 +100,21 @@ def find_signal():
 
 
 def preflight_otc_feed():
-    """Verify live OTC access before announcing or opening a trading session."""
+    """Verify live OTC access and durable state storage before a session."""
     if not os.getenv("OTCHARTS_API_KEY", "").strip():
         raise RuntimeError("OTCHARTS_API_KEY is missing; refusing to use non-OTC fallback data.")
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Supabase credentials are missing; refusing to run a session without durable state.")
+    from supabase_db import get_client
+    try:
+        client = get_client()
+        client.table("bot_state").select("session_id").limit(1).execute()
+    except Exception as exc:
+        raise RuntimeError(
+            "Supabase preflight failed. Check bot_state table and SELECT permissions; "
+            "no session was started."
+        ) from exc
+
     last_error = None
     for pair, symbol in TRADING_PAIRS.items():
         try:
@@ -120,7 +132,7 @@ def preflight_otc_feed():
                 ) from exc
             log.warning("OTC preflight unavailable for %s: %s", symbol, exc)
     raise RuntimeError(
-        f"Trading session safely blocked: no usable Quotex OTC feed was found. "
+        "Trading session safely blocked: no usable Quotex OTC feed was found. "
         f"No session announcement or trading signal was sent. Last error: {last_error}"
     )
 
@@ -134,7 +146,7 @@ def main():
         "30 6 * * *": (12, 0),
         "30 8 * * *": (14, 0),
         "30 12 * * *": (18, 0),
-        "30 16 * * *": (22, 0),
+        "30 17 * * *": (23, 0),
     }
     if scheduled_cron in cron_to_ist:
         hour, minute = cron_to_ist[scheduled_cron]
