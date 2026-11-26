@@ -24,7 +24,7 @@ DAILY_MESSAGES = {
 
 🌇 4th Session -: 06:00 PM
 
-🌙 5th Session -: 11:00 PM
+🌙 5th Session -: 10:00 PM
 
 ⚠️ IMPORTANT NOTE: Be online 5 minutes before the session time! Follow strict money management and protect your capital. 🚀💰""",
 
