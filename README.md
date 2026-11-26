@@ -9,14 +9,14 @@ Add these repository Actions secrets:
 - `BOT_TOKEN` — Telegram bot token
 - `CHANNEL_ID` — target private channel ID
 - `SUPABASE_URL` — Supabase project URL
-- `SUPABASE_KEY` — Supabase service/API key with the required table permissions
+- `SUPABASE_KEY` — Supabase `service_role` secret key (keep private; never expose it)
 - `OTCHARTS_API_KEY` — eligible OTCharts API key for Quotex OTC candles
 
 Never commit tokens or keys to the repository.
 
 ## Supabase table requirement
 
-Create a table named `bot_state` with:
+Run [`supabase_schema.sql`](supabase_schema.sql) once in the Supabase SQL Editor. It creates the required table with Row Level Security enabled and no public policies. The bot uses the server-side `service_role` key. The table has:
 - `session_id`: text, unique or primary key
 - `state`: jsonb
 
