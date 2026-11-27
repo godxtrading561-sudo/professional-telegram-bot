@@ -60,11 +60,23 @@ def run_session(session_id, send_message, find_signal, send_photo=None):
                 log.warning("Ignoring malformed signal: %r %r", pair, signal)
                 continue
 
+            candle_time = signal.get("candle_time")
+            duplicate = any(
+                old.get("pair") == pair
+                and old.get("candle_time") == candle_time
+                and old.get("direction") == signal.get("direction")
+                for old in current.get("trades", [])
+            )
+            if candle_time and duplicate:
+                log.info("Duplicate candle signal ignored: %s %s %s", pair, candle_time, signal["direction"])
+                time.sleep(min(RETRY_INTERVAL_SECONDS, max(0, SESSION_MAX_RUNTIME_SECONDS - (time.monotonic() - started_at))))
+                continue
+
             signal_time = datetime.now(timezone.utc).isoformat()
             trade = {
                 "pair": pair, "ticker": signal.get("ticker"),
                 "direction": signal["direction"], "score": signal.get("score"),
-                "time": signal_time, "candle_time": signal.get("candle_time"),
+                "time": signal_time, "candle_time": candle_time,
                 "reasons": signal.get("reasons", [signal.get("reason", "")]),
                 "result": "PENDING",
             }
