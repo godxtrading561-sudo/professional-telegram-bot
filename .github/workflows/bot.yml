@@ -16,7 +16,7 @@ concurrency:
         required: true
         default: test_yahoo_data
         type: choice
-        options: [telegram_test, test_yahoo_data, download_data, backtest, test_supabase, daily_messages]
+        options: [telegram_test, test_yahoo_data, download_data, backtest, test_supabase, daily_messages, run_test_session]
   schedule:
     - cron: "30 3 * * *"
     - cron: "30 6 * * *"
