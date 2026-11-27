@@ -1,105 +1,83 @@
-"""Download free Dukascopy 1-minute SPOT FX candles for strategy research.
+"""Download free HistData 1-minute regular FX spot candles for research.
 
-IMPORTANT: Dukascopy data is regular FX spot data, NOT Quotex OTC data.
-Files are deliberately named *_spot.csv so they cannot be mistaken for OTC candles.
+HistData timestamps are EST (UTC-5) year-round. These are not Quotex OTC prices.
 """
-import glob
 import os
-import subprocess
 from datetime import datetime, timezone
 
 import pandas as pd
+from histdata_fetcher import fetch_data
 
 DATA_DIR = "data"
-DOWNLOAD_DIR = "dukascopy_download"
-# A longer sample is needed for a meaningful first-pass research backtest.
 START_DATE = os.getenv("DATA_START_DATE", "2025-01-01")
-PAIRS = {
-    "EURUSD": "eurusd",
-    "GBPUSD": "gbpusd",
-    "USDJPY": "usdjpy",
-    "AUDCAD": "audcad",
-    "EURJPY": "eurjpy",
-    "GBPJPY": "gbpjpy",
-    "AUDUSD": "audusd",
-    "USDCHF": "usdchf",
-    "NZDUSD": "nzdusd",
-    "EURGBP": "eurgbp",
-}
+PAIRS = [
+    "EURUSD", "GBPUSD", "USDJPY", "AUDCAD", "EURJPY",
+    "GBPJPY", "AUDUSD", "USDCHF", "NZDUSD", "EURGBP",
+]
 
 
-def download_pair(pair, instrument, end_date):
-    pair_dir = os.path.join(DOWNLOAD_DIR, pair)
-    os.makedirs(pair_dir, exist_ok=True)
-    command = [
-        "npx", "--yes", "dukascopy-node",
-        "-i", instrument,
-        "-from", START_DATE,
-        "-to", end_date,
-        "-t", "m1",
-        "-f", "csv",
-        "-dir", pair_dir,
-        "-fn", f"{pair.lower()}-m1",
-        "-r", "3",
-        "-rp", "1500",
-        "-re",
-    ]
-    print(f"Downloading {pair} spot candles...")
-    subprocess.run(command, check=True)
+def download_pair(pair, end_date):
+    print(f"Downloading {pair} HistData 1-minute spot candles...")
+    result = fetch_data(
+        pair=pair,
+        start_date=START_DATE,
+        end_date=end_date,
+        timeframe="1min",
+        output_format=None,
+        max_workers=2,
+    )
+    if result.data is None or result.data.empty:
+        details = "; ".join(
+            f"{x.period_label}: {x.reason}" for x in (result.failed_periods or [])
+        )
+        raise RuntimeError(f"No HistData candles returned. {details}")
 
-    files = glob.glob(os.path.join(pair_dir, "*.csv"))
-    if not files:
-        raise RuntimeError(f"No downloaded CSV found for {pair}")
-
-    frames = [pd.read_csv(path) for path in files]
-    df = pd.concat(frames, ignore_index=True)
+    df = result.data.copy()
     df.columns = [str(col).lower().strip() for col in df.columns]
+    if "datetime" not in df.columns:
+        raise ValueError(f"{pair}: HistData datetime column missing: {list(df.columns)}")
 
-    required = ["timestamp", "open", "high", "low", "close"]
-    missing = [col for col in required if col not in df.columns]
-    if missing:
-        raise ValueError(f"{pair}: missing {missing}; found {list(df.columns)}")
-
-    ts = pd.to_numeric(df["timestamp"], errors="coerce")
-    if ts.notna().all():
-        df["timestamp"] = pd.to_datetime(ts, unit="ms", utc=True)
-    else:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
-
+    # HistData documents timestamps as fixed EST (UTC-5), without DST.
+    local = pd.to_datetime(df["datetime"], errors="coerce")
+    df["timestamp"] = (
+        local.dt.tz_localize("Etc/GMT+5", ambiguous="NaT", nonexistent="NaT")
+        .dt.tz_convert("UTC")
+    )
     for col in ["open", "high", "low", "close"]:
+        if col not in df.columns:
+            raise ValueError(f"{pair}: missing {col} column")
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df = (
-        df[required]
+        df[["timestamp", "open", "high", "low", "close"]]
         .dropna()
         .drop_duplicates(subset=["timestamp"])
         .sort_values("timestamp")
     )
     if len(df) < 200:
-        raise RuntimeError(f"{pair}: only {len(df)} valid candles; refusing empty/short dataset")
+        raise RuntimeError(f"{pair}: only {len(df)} valid candles; refusing short dataset")
 
+    os.makedirs(DATA_DIR, exist_ok=True)
     output = os.path.join(DATA_DIR, f"{pair}_spot.csv")
     df.to_csv(output, index=False)
-    print(f"Saved {pair}: {len(df)} candles -> {output}")
+    print(f"Saved {pair}: {len(df):,} candles -> {output}")
+    if result.failed_periods:
+        print(f"WARNING {pair}: some periods unavailable: {len(result.failed_periods)}")
 
 
 def main():
-    os.makedirs(DATA_DIR, exist_ok=True)
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     end_date = datetime.now(timezone.utc).date().isoformat()
-
     failures = []
-    for pair, instrument in PAIRS.items():
+    for pair in PAIRS:
         try:
-            download_pair(pair, instrument, end_date)
+            download_pair(pair, end_date)
         except Exception as exc:
             failures.append(f"{pair}: {exc}")
             print(f"ERROR {pair}: {exc}")
 
     if failures:
-        raise SystemExit("Some pair downloads failed:\n" + "\n".join(failures))
-
-    print("All ten spot datasets downloaded. These are NOT OTC market candles.")
+        raise SystemExit("Historical download incomplete:\n" + "\n".join(failures))
+    print("All ten HistData SPOT datasets downloaded. These are NOT OTC market candles.")
 
 
 if __name__ == "__main__":
