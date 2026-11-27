@@ -16,7 +16,7 @@ concurrency:
         required: true
         default: test_yahoo_data
         type: choice
-        options: [telegram_test, test_telegram_e2e, test_yahoo_data, full_validation, download_data, test_supabase, verify_latest_session, recover_interrupted_session, daily_messages]
+        options: [telegram_test, test_telegram_e2e, test_quotex_otc_data, test_yahoo_data, full_validation, download_data, test_supabase, verify_latest_session, recover_interrupted_session, daily_messages]
   schedule:
     - cron: "30 3 * * *"
     - cron: "30 6 * * *"
@@ -74,6 +74,11 @@ jobs:
       - name: Run safety regression tests for full validation
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'full_validation'
         run: python -m unittest -v test_safety test_signal_engine
+      - name: Test Quotex OTC 1-minute candles (single request)
+        if: github.event_name == 'workflow_dispatch' && inputs.task == 'test_quotex_otc_data'
+        env:
+          OTCHARTS_API_KEY: ${{ secrets.OTCHARTS_API_KEY }}
+        run: python test_quotex_otc_data.py
       - name: Test Yahoo Finance 1-minute FX feed
         if: github.event_name == 'workflow_dispatch' && (inputs.task == 'test_yahoo_data' || inputs.task == 'full_validation')
         run: python test_yahoo_data.py
