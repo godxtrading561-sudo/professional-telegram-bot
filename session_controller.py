@@ -1,14 +1,14 @@
-"""Bounded session runner with verified one-minute OTC result evaluation."""
+"""Bounded session runner with Yahoo FX one-minute result evaluation."""
 import logging
 import os
 import time
 from datetime import datetime, timezone
 
-from config import MAX_SIGNALS_PER_SESSION, SIGNAL_INTERVAL_SECONDS, RETRY_INTERVAL_SECONDS, SESSION_MAX_RUNTIME_SECONDS, TIMEZONE
+from config import MAX_SIGNALS_PER_SESSION, SIGNAL_INTERVAL_SECONDS, RETRY_INTERVAL_SECONDS, SESSION_MAX_RUNTIME_SECONDS
 from state import start_session, get_session, add_trade, close_session, update_session, update_trade_result
 from session_messages import session_start_message, signal_message, session_close_message, trade_result_message
 from session_summary import create_session_summary
-from quotex_data import fetch_quotex_candles, evaluate_one_minute_result, CandleFeedError
+from yahoo_data import evaluate_yahoo_result, YahooDataError
 
 log = logging.getLogger("session-controller")
 
@@ -61,8 +61,13 @@ def run_session(session_id, send_message, find_signal, send_photo=None):
                 continue
 
             signal_time = datetime.now(timezone.utc).isoformat()
-            trade = {"pair": pair, "direction": signal["direction"], "score": signal.get("score"),
-                     "time": signal_time, "reasons": signal.get("reasons", []), "result": "PENDING"}
+            trade = {
+                "pair": pair, "ticker": signal.get("ticker"),
+                "direction": signal["direction"], "score": signal.get("score"),
+                "time": signal_time, "candle_time": signal.get("candle_time"),
+                "reasons": signal.get("reasons", [signal.get("reason", "")]),
+                "result": "PENDING",
+            }
             caption = signal_message(sent + 1, trade)
             chart_path = signal.get("chart_path")
             if chart_path and send_photo:
@@ -71,7 +76,6 @@ def run_session(session_id, send_message, find_signal, send_photo=None):
                     os.remove(chart_path)
                 except OSError:
                     pass
-                # Preserve the signal if Telegram rejects the image upload.
                 if not delivered:
                     log.warning("Photo delivery failed; falling back to text signal.")
                     delivered = send_message(caption)
@@ -89,21 +93,17 @@ def run_session(session_id, send_message, find_signal, send_photo=None):
             trade_index = sent
             sent += 1
             last_sent_at = time.monotonic()
-            log.info("Signal %d/%d sent; waiting for 1-minute expiry", sent, MAX_SIGNALS_PER_SESSION)
-
-            # One expiry check, not a rapid polling loop. If feed lacks the exact
-            # expiry candle, retain PENDING rather than inventing a result.
+            log.info("Signal %d/%d sent; waiting for one-minute expiry", sent, MAX_SIGNALS_PER_SESSION)
             time.sleep(125)
             try:
-                candles = fetch_quotex_candles(pair, limit=360)
-                result = evaluate_one_minute_result(trade["direction"], signal_time, candles)
+                result = evaluate_yahoo_result(trade["direction"], signal_time, trade["ticker"])
                 if result is None:
-                    log.warning("No complete entry/expiry candle for %s; result remains pending", pair)
+                    log.warning("No complete Yahoo FX expiry candle for %s; result remains pending", pair)
                 elif update_trade_result(session_id, trade_index, {"result": result["status"], **result}):
                     if not send_message(trade_result_message(trade, result)):
-                        log.error("Verified result saved but Telegram result message failed.")
-            except CandleFeedError as exc:
-                log.error("Cannot verify trade result from OTC feed: %s", exc)
+                        log.error("Verified Yahoo FX result saved but Telegram result message failed.")
+            except YahooDataError as exc:
+                log.error("Cannot verify result from Yahoo Finance: %s", exc)
 
     except Exception:
         close_reason = "Unexpected session error"
