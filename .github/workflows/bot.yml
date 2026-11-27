@@ -91,6 +91,8 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python scheduler.py
       - name: Upload backtest report
         if: always() && github.event_name == 'workflow_dispatch' && (inputs.task == 'backtest' || inputs.task == 'full_validation')
