@@ -65,6 +65,9 @@ jobs:
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
         run: |
           python -c "import os,requests; r=requests.post('https://api.telegram.org/bot'+os.environ['BOT_TOKEN']+'/sendMessage',json={'chat_id':os.environ['CHANNEL_ID'],'text':'PROFESSIONAL BOT CONNECTED'},timeout=20); r.raise_for_status(); print('Telegram test successful')"
+      - name: Run safety regression tests for full validation
+        if: github.event_name == 'workflow_dispatch' && inputs.task == 'full_validation'
+        run: python -m unittest -v test_safety test_signal_engine
       - name: Test Yahoo Finance 1-minute FX feed
         if: github.event_name == 'workflow_dispatch' && (inputs.task == 'test_yahoo_data' || inputs.task == 'full_validation')
         run: python test_yahoo_data.py
