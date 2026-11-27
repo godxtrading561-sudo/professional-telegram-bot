@@ -68,11 +68,6 @@ jobs:
       - name: Test Yahoo Finance 1-minute FX feed
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'test_yahoo_data'
         run: python test_yahoo_data.py
-      - name: Download historical SPOT candles
-        if: github.event_name == 'workflow_dispatch' && (inputs.task == 'download_data' || inputs.task == 'full_validation')
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
       - name: Run historical SPOT downloader
         if: github.event_name == 'workflow_dispatch' && (inputs.task == 'download_data' || inputs.task == 'full_validation')
         run: python download_data.py
