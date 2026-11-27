@@ -30,12 +30,11 @@ Open Actions → Professional Telegram Bot → Run workflow:
 1. telegram_test — sends a Telegram connectivity test.
 2. test_supabase — checks durable state storage.
 3. test_yahoo_data — checks fresh Yahoo Finance 1-minute FX candles.
-4. full_validation — downloads historical SPOT candles, runs the strategy backtest, and verifies Supabase in one workflow.
-5. download_data — downloads free HistData 1-minute regular FX spot candles for research.
-6. backtest — evaluates the configured strategy on downloaded historical data.
-7. daily_messages — manually sends a due daily message.
+4. full_validation — checks live Yahoo Finance 1-minute FX data and verifies Supabase. It does **not** run a backtest.
+5. download_data — optional HistData 1-minute regular FX spot download only.
+6. daily_messages — manually sends a due daily message.
 
-Trading sessions remain disabled until the Yahoo data, strategy, and persistence tests have passed.
+Trading sessions remain disabled until the live data and persistence checks have passed.
 
 ## IST schedule
 
