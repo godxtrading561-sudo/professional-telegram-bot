@@ -87,7 +87,8 @@ jobs:
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python recover_session.py      - name: Verify latest persisted session and trade results
+        run: python recover_session.py
+      - name: Verify latest persisted session and trade results
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'verify_latest_session'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
