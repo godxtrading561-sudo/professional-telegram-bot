@@ -2,61 +2,58 @@
 
 Automated Telegram channel messenger and signal publisher. All times use **Asia/Kolkata (IST)**.
 
-## GitHub repository setup
+## Data source and strategy
 
-Add these repository Actions secrets:
+- Yahoo Finance yfinance 1-minute candles, requested with period=2d and interval=1m.
+- Ten ordinary FX symbols: EUR/USD, GBP/USD, USD/JPY, AUD/CAD, EUR/JPY, GBP/JPY, AUD/USD, USD/CHF, NZD/USD, EUR/GBP.
+- Original EMA 9 / EMA 21 + RSI 14 + candle-body confirmation strategy.
+- Only completed candles are used; forming candles and stale/invalid data are rejected.
+- Yahoo Finance FX quotes are ordinary FX market data, NOT Quotex OTC candles. Results are Yahoo FX candle outcomes and must never be represented as verified Quotex OTC outcomes.
 
-- `BOT_TOKEN` — Telegram bot token
-- `CHANNEL_ID` — target private channel ID
-- `SUPABASE_URL` — Supabase project URL
-- `SUPABASE_KEY` — Supabase `service_role` secret key (keep private; never expose it)
-- `OTCHARTS_API_KEY` — eligible OTCharts API key for Quotex OTC candles
+## Required GitHub Actions secrets
 
-Never commit tokens or keys to the repository.
+- BOT_TOKEN — Telegram bot token
+- CHANNEL_ID — target private channel ID
+- SUPABASE_URL — Supabase project URL
+- SUPABASE_KEY — Supabase server-side service_role key; keep private
 
-## Supabase table requirement
+Never commit tokens or keys.
 
-Run [`supabase_schema.sql`](supabase_schema.sql) once in the Supabase SQL Editor. It creates the required table with Row Level Security enabled and no public policies. The bot uses the server-side `service_role` key. The table has:
-- `session_id`: text, unique or primary key
-- `state`: jsonb
+## Supabase table
 
-The Actions task `test_supabase` performs a temporary insert, read-back, and delete check. Do not run trading sessions until this test passes.
+Run supabase_schema.sql once in Supabase SQL Editor. The test_supabase task performs temporary insert, read-back, and delete verification. Supabase is required for sessions; local runner storage is not accepted as durable state.
 
 ## GitHub Actions tasks
 
-Open **Actions → Professional Telegram Bot → Run workflow**:
+Open Actions → Professional Telegram Bot → Run workflow:
 
-1. `telegram_test` — sends a Telegram connectivity test message.
-2. `test_supabase` — checks durable state storage.
-3. `test_otcharts` — checks the configured live Quotex OTC candle feed.
-4. `download_data` — downloads historical ordinary Forex/spot candles for research only.
-5. `backtest` — evaluates the strategy on downloaded historical data.
-6. `daily_messages` — manually sends a due daily message.
-7. `run_session` — manually starts a session; do not use until Supabase and OTC preflight both pass.
+1. telegram_test — sends a Telegram connectivity test.
+2. test_supabase — checks durable state storage.
+3. test_yahoo_data — checks fresh Yahoo Finance 1-minute FX candles.
+4. download_data — downloads historical spot candles for research.
+5. backtest — evaluates the configured strategy on downloaded historical data.
+6. daily_messages — manually sends a due daily message.
 
-## IST daily schedule
+Trading sessions remain disabled until the Yahoo data, strategy, and persistence tests have passed.
+
+## IST schedule
 
 - 07:00 — Morning briefing
 - 08:00 — Daily session schedule
-- 09:00, 12:00, 14:00, 18:00, 23:00 — Trading session starts
+- 09:00, 12:00, 14:00, 18:00, 23:00 — planned session starts
 - 00:00 — Good-night message
 
-GitHub Actions cron uses UTC and may be delayed. Daily messages have a bounded 90-minute catch-up window.
+GitHub Actions cron is best-effort and may start late.
 
-## Session safeguards
+## Safeguards
 
-- Maximum 12 successfully delivered signals per session.
-- At least 5 minutes between signals.
-- A session is closed after the signal cap, runtime limit, or an unrecoverable error.
-- Closed session IDs cannot be restarted.
-- Signals require live Quotex OTC candles; there is no Forex/spot fallback.
-- One-minute results are reported only when a complete eligible candle is available. Missing data remains pending.
-- Supabase is required before a scheduled session; ephemeral runner storage is not accepted.
+- Maximum 12 delivered signals per session and at least 5 minutes between signals.
+- Session runtime is bounded to 90 minutes.
+- Closed session IDs cannot be restarted; closed sessions do not send more signals.
+- Supabase is mandatory before a session.
+- Missing, malformed, or stale candle data produces no signal/result.
+- Unverified results remain pending; no invented WIN/LOSS results.
 
-## Data and performance limitations
+## Performance limitations
 
-OTCharts is an independent, read-only data provider, not an official Quotex trading API. The bot does not place trades. A working API key and an eligible provider plan are required.
-
-Historical spot Forex candles are **not** Quotex OTC candles and cannot validate OTC signal accuracy. No 80–85% win rate is promised. Backtest results must be checked for sample size, out-of-sample performance, payout, and execution differences before any real-money use.
-
-GitHub scheduled workflows are best-effort and are not guaranteed to start at the exact minute.
+No 80–85% win rate is promised. Measure the strategy on a sufficiently large, out-of-sample dataset. Yahoo Finance 1-minute availability and quote timing can vary, and regular FX spot data differs from Quotex OTC prices, payout rules, and execution. Do not use these results as proof of OTC performance or as a guarantee of profit.
