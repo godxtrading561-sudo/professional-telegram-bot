@@ -105,17 +105,17 @@ def run_session(session_id, send_message, find_signal, send_photo=None):
             trade_index = sent
             sent += 1
             last_sent_at = time.monotonic()
-            log.info("Signal %d/%d sent; waiting for one-minute expiry", sent, MAX_SIGNALS_PER_SESSION)
+            log.info("Signal %d/%d sent; waiting for the next completed Quotex OTC 1-minute candle", sent, MAX_SIGNALS_PER_SESSION)
             time.sleep(125)
             try:
                 result = evaluate_quotex_otc_result(trade["direction"], trade["candle_time"], trade["ticker"])
                 if result is None:
-                    log.warning("No complete Yahoo FX expiry candle for %s; result remains pending", pair)
+                    log.warning("No completed Quotex OTC expiry candle for %s yet; result remains pending", pair)
                 elif update_trade_result(session_id, trade_index, {"result": result["status"], **result}):
                     if not send_message(trade_result_message(trade, result)):
-                        log.error("Verified Yahoo FX result saved but Telegram result message failed.")
+                        log.error("Verified Quotex OTC result saved but Telegram result message failed.")
             except QuotexOTCDataError as exc:
-                log.error("Cannot verify result from Yahoo Finance: %s", exc)
+                log.error("Cannot verify result from Quotex OTC feed: %s", exc)
 
     except Exception:
         close_reason = "Unexpected session error"
