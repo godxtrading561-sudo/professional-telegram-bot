@@ -7,28 +7,30 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-OTCHARTS_API_KEY = os.getenv("OTCHARTS_API_KEY", "")
 
 MAX_SIGNALS_PER_SESSION = 12
 SIGNAL_INTERVAL_SECONDS = 300
 RETRY_INTERVAL_SECONDS = 30
 SESSION_MAX_RUNTIME_SECONDS = 90 * 60
-# GitHub scheduled workflows can start late; allow a bounded catch-up window.
 SCHEDULE_GRACE_MINUTES = 90
 RESULT_EXPIRY_SECONDS = 60
 
 DAILY_MESSAGES = {"morning": time(7, 0), "schedule": time(8, 0), "good_night": time(0, 0)}
 TRADING_SESSIONS = [time(9, 0), time(12, 0), time(14, 0), time(18, 0), time(23, 0)]
-MIN_CANDLES = 60
-MIN_SIGNAL_SCORE = 4
 
-# Quotex OTC symbols supported by the selected data feed.
+MIN_CANDLES = 60
+# Yahoo Finance symbols are ordinary FX market data, NOT Quotex OTC prices.
 TRADING_PAIRS = {
-    "EURUSD_otc": "EURUSD_otc",
-    "GBPUSD_otc": "GBPUSD_otc",
-    "USDJPY_otc": "USDJPY_otc",
-    "AUDUSD_otc": "AUDUSD_otc",
-    "BTCUSD_otc": "BTCUSD_otc",
+    "EUR/USD": "EURUSD=X",
+    "GBP/USD": "GBPUSD=X",
+    "USD/JPY": "USDJPY=X",
+    "AUD/CAD": "AUDCAD=X",
+    "EUR/JPY": "EURJPY=X",
+    "GBP/JPY": "GBPJPY=X",
+    "AUD/USD": "AUDUSD=X",
+    "USD/CHF": "USDCHF=X",
+    "NZD/USD": "NZDUSD=X",
+    "EUR/GBP": "EURGBP=X",
 }
 DATA_FOLDER = "data"
 REPORT_FOLDER = "reports"
