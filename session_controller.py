@@ -1,4 +1,4 @@
-"""Bounded session runner with Yahoo FX one-minute result evaluation."""
+"""Bounded session runner; signals and results use the same Quotex OTC feed."""
 import logging
 import os
 import time
@@ -8,7 +8,7 @@ from config import MAX_SIGNALS_PER_SESSION, SIGNAL_INTERVAL_SECONDS, RETRY_INTER
 from state import start_session, get_session, add_trade, close_session, update_session, update_trade_result
 from session_messages import session_start_message, signal_message, session_close_message, trade_result_message
 from session_summary import create_session_summary
-from yahoo_data import evaluate_yahoo_result, YahooDataError
+from otc_data import evaluate_quotex_otc_result, QuotexOTCDataError
 
 log = logging.getLogger("session-controller")
 
@@ -108,13 +108,13 @@ def run_session(session_id, send_message, find_signal, send_photo=None):
             log.info("Signal %d/%d sent; waiting for one-minute expiry", sent, MAX_SIGNALS_PER_SESSION)
             time.sleep(125)
             try:
-                result = evaluate_yahoo_result(trade["direction"], signal_time, trade["ticker"])
+                result = evaluate_quotex_otc_result(trade["direction"], trade["candle_time"], trade["ticker"])
                 if result is None:
                     log.warning("No complete Yahoo FX expiry candle for %s; result remains pending", pair)
                 elif update_trade_result(session_id, trade_index, {"result": result["status"], **result}):
                     if not send_message(trade_result_message(trade, result)):
                         log.error("Verified Yahoo FX result saved but Telegram result message failed.")
-            except YahooDataError as exc:
+            except QuotexOTCDataError as exc:
                 log.error("Cannot verify result from Yahoo Finance: %s", exc)
 
     except Exception:
