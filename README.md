@@ -8,7 +8,7 @@ Automated Telegram channel messenger and signal publisher. All times use **Asia/
 - Ten ordinary FX symbols: EUR/USD, GBP/USD, USD/JPY, AUD/CAD, EUR/JPY, GBP/JPY, AUD/USD, USD/CHF, NZD/USD, EUR/GBP.
 - Original EMA 9 / EMA 21 + RSI 14 + candle-body confirmation strategy.
 - Only completed candles are used; forming candles and stale/invalid data are rejected.
-- Yahoo Finance FX quotes are ordinary FX market data, NOT Quotex OTC candles. Results are Yahoo FX candle outcomes and must never be represented as verified Quotex OTC outcomes.
+- Yahoo Finance FX quotes and HistData historical candles are ordinary FX spot data, NOT Quotex OTC candles. Results are Yahoo FX candle outcomes and must never be represented as verified Quotex OTC outcomes.
 
 ## Required GitHub Actions secrets
 
@@ -31,7 +31,7 @@ Open Actions → Professional Telegram Bot → Run workflow:
 2. test_supabase — checks durable state storage.
 3. test_yahoo_data — checks fresh Yahoo Finance 1-minute FX candles.
 4. full_validation — downloads historical SPOT candles, runs the strategy backtest, and verifies Supabase in one workflow.
-5. download_data — downloads historical spot candles for research.
+5. download_data — downloads free HistData 1-minute regular FX spot candles for research.
 6. backtest — evaluates the configured strategy on downloaded historical data.
 7. daily_messages — manually sends a due daily message.
 
