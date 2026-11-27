@@ -80,7 +80,14 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python test_supabase.py
-      - name: Recover interrupted session with all results saved\n        if: github.event_name == 'workflow_dispatch' && inputs.task == 'recover_interrupted_session'\n        env:\n          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}\n          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}\n          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}\n          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}\n        run: python recover_session.py\n      - name: Verify latest persisted session and trade results
+      - name: Recover interrupted session with all results saved
+        if: github.event_name == 'workflow_dispatch' && inputs.task == 'recover_interrupted_session'
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python recover_session.py\n      - name: Verify latest persisted session and trade results
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'verify_latest_session'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
