@@ -6,13 +6,14 @@ Files are deliberately named *_spot.csv so they cannot be mistaken for OTC candl
 import glob
 import os
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pandas as pd
 
 DATA_DIR = "data"
 DOWNLOAD_DIR = "dukascopy_download"
-START_DATE = os.getenv("DATA_START_DATE", "2026-10-01")
+# A longer sample is needed for a meaningful first-pass research backtest.
+START_DATE = os.getenv("DATA_START_DATE", "2025-01-01")
 PAIRS = {
     "EURUSD": "eurusd",
     "GBPUSD": "gbpusd",
@@ -20,6 +21,10 @@ PAIRS = {
     "AUDCAD": "audcad",
     "EURJPY": "eurjpy",
     "GBPJPY": "gbpjpy",
+    "AUDUSD": "audusd",
+    "USDCHF": "usdchf",
+    "NZDUSD": "nzdusd",
+    "EURGBP": "eurgbp",
 }
 
 
@@ -55,7 +60,6 @@ def download_pair(pair, instrument, end_date):
     if missing:
         raise ValueError(f"{pair}: missing {missing}; found {list(df.columns)}")
 
-    # Dukascopy timestamps are Unix milliseconds; normalize to UTC ISO strings.
     ts = pd.to_numeric(df["timestamp"], errors="coerce")
     if ts.notna().all():
         df["timestamp"] = pd.to_datetime(ts, unit="ms", utc=True)
@@ -95,7 +99,7 @@ def main():
     if failures:
         raise SystemExit("Some pair downloads failed:\n" + "\n".join(failures))
 
-    print("All spot datasets downloaded. These are NOT OTC market candles.")
+    print("All ten spot datasets downloaded. These are NOT OTC market candles.")
 
 
 if __name__ == "__main__":
