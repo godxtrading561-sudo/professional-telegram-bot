@@ -146,7 +146,23 @@ def preflight_data_and_state():
 
 
 def main():
-    preflight_data_and_state()
+    # Never start a trading session unless Supabase state and verified OTC candles
+    # are both available. Keep this failure isolated from the separate daily-message
+    # workflow, and notify the channel that no signal was sent.
+    try:
+        preflight_data_and_state()
+    except RuntimeError as exc:
+        log.error("Trading session safely skipped: %s", exc)
+        try:
+            send_message(
+                "⚠️ <b>TRADING SESSION SKIPPED</b>\n"
+                "Verified Quotex OTC candle data or persistent session storage is unavailable.\n"
+                "No CALL/PUT signals were generated or sent. Daily scheduled messages run separately."
+            )
+        except Exception:
+            log.exception("Could not send trading-session skip notice.")
+        return False
+
     now = datetime.now(TIMEZONE)
     scheduled_cron = os.getenv("SESSION_SCHEDULE_CRON", "").strip()
     cron_to_ist = {
@@ -162,6 +178,7 @@ def main():
     else:
         session_id = now.strftime("%Y-%m-%d-%H-%M")
     run_session(session_id=session_id, send_message=send_message, find_signal=find_signal, send_photo=send_photo)
+    return True
 
 
 if __name__ == "__main__":
