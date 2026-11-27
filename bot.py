@@ -56,20 +56,55 @@ def send_photo(photo_path, caption):
 
 
 def make_signal_chart(candles, symbol):
-    recent = candles.tail(60)
-    fig, ax = plt.subplots(figsize=(10, 5), dpi=140)
-    ax.plot(recent.index, recent["close"], linewidth=1.8, label="Close")
-    ax.set_title(f"{symbol} — QUOTEX OTC — 1 Minute")
-    ax.set_xlabel("UTC")
+    """Render real OHLC candlesticks (not a close-price line) for the OTC feed."""
+    from matplotlib.patches import Rectangle
+    import matplotlib.dates as mdates
+
+    recent = candles.tail(60).copy()
+    fig, ax = plt.subplots(figsize=(10, 5.6), dpi=160)
+    x_values = mdates.date2num(recent.index.to_pydatetime())
+    candle_width = 0.72 / (24 * 60)  # 0.72 of one minute, in Matplotlib date units
+
+    for x, (_, candle) in zip(x_values, recent.iterrows()):
+        open_price = float(candle["open"])
+        high_price = float(candle["high"])
+        low_price = float(candle["low"])
+        close_price = float(candle["close"])
+        rising = close_price >= open_price
+        candle_color = "#16a34a" if rising else "#dc2626"
+
+        # High-low wick and open-close candle body.
+        ax.vlines(x, low_price, high_price, color=candle_color, linewidth=1.0, zorder=2)
+        body_bottom = min(open_price, close_price)
+        body_height = abs(close_price - open_price)
+        if body_height == 0:
+            body_height = max((high_price - low_price) * 0.015, 1e-9)
+        ax.add_patch(Rectangle(
+            (x - candle_width / 2, body_bottom),
+            candle_width,
+            body_height,
+            facecolor=candle_color,
+            edgecolor=candle_color,
+            linewidth=0.7,
+            zorder=3,
+        ))
+
+    ax.set_title(f"{symbol} — QUOTEX OTC — 1 MIN CANDLE CHART", pad=12, fontweight="bold")
+    ax.set_xlabel("Time (UTC)")
     ax.set_ylabel("OTC Price")
-    ax.grid(True, alpha=0.25)
-    ax.legend(loc="best")
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=recent.index.tz))
+    ax.grid(True, alpha=0.22, linestyle="--")
+    ax.margins(x=0.025)
     fig.autofmt_xdate()
     fig.tight_layout()
+
     fd, path = tempfile.mkstemp(prefix="otc_signal_", suffix=".png")
     os.close(fd)
-    fig.savefig(path, format="png")
-    plt.close(fig)
+    try:
+        fig.savefig(path, format="png", facecolor="white")
+    finally:
+        plt.close(fig)
     return path
 
 
