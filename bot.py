@@ -74,11 +74,9 @@ def make_signal_chart(candles, symbol):
 
 
 def find_signal():
-    try:
-        candles = fetch_quotex_otc_candles(DEFAULT_SYMBOL, limit=180)
-    except QuotexOTCDataError as exc:
-        log.warning("Quotex OTC feed unavailable; no signal: %s", exc)
-        return None, None
+    # Propagate provider failures so the session closes immediately instead of
+    # silently waiting/retrying for 90 minutes with no verified OTC feed.
+    candles = fetch_quotex_otc_candles(DEFAULT_SYMBOL, limit=180)
     signal = analyze_market(candles)
     if not signal:
         return None, None
