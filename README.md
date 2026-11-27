@@ -57,4 +57,4 @@ GitHub Actions cron is best-effort and may start late.
 
 ## Performance limitations
 
-No 80–85% win rate is promised. Measure the strategy on a sufficiently large, out-of-sample dataset. Yahoo Finance 1-minute availability and quote timing can vary, and regular FX spot data differs from Quotex OTC prices, payout rules, and execution. Do not use these results as proof of OTC performance or as a guarantee of profit.
+No 80–85% win rate is promised. No backtest is part of the current workflow. Yahoo Finance 1-minute availability and quote timing can vary, and regular FX spot data differs from Quotex OTC prices, payout rules, and execution. Do not use these results as proof of OTC performance or as a guarantee of profit.
