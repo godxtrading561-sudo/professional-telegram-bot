@@ -16,7 +16,7 @@ concurrency:
         required: true
         default: test_yahoo_data
         type: choice
-        options: [telegram_test, test_yahoo_data, full_validation, download_data, test_supabase, verify_latest_session, daily_messages]
+        options: [telegram_test, test_yahoo_data, full_validation, download_data, test_supabase, verify_latest_session, recover_interrupted_session, daily_messages]
   schedule:
     - cron: "30 3 * * *"
     - cron: "30 6 * * *"
@@ -80,7 +80,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python test_supabase.py
-      - name: Verify latest persisted session and trade results
+      - name: Recover interrupted session with all results saved\n        if: github.event_name == 'workflow_dispatch' && inputs.task == 'recover_interrupted_session'\n        env:\n          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}\n          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}\n          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}\n          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}\n        run: python recover_session.py\n      - name: Verify latest persisted session and trade results
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'verify_latest_session'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
