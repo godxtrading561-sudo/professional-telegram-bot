@@ -16,7 +16,7 @@ concurrency:
         required: true
         default: test_yahoo_data
         type: choice
-        options: [telegram_test, test_yahoo_data, full_validation, download_data, backtest, test_supabase, daily_messages, run_test_session]
+        options: [telegram_test, test_yahoo_data, full_validation, download_data, test_supabase, daily_messages, run_test_session]
   schedule:
     - cron: "30 3 * * *"
     - cron: "30 6 * * *"
@@ -69,11 +69,8 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'test_yahoo_data'
         run: python test_yahoo_data.py
       - name: Run historical SPOT downloader
-        if: github.event_name == 'workflow_dispatch' && (inputs.task == 'download_data' || inputs.task == 'full_validation')
+        if: github.event_name == 'workflow_dispatch' && inputs.task == 'download_data'
         run: python download_data.py
-      - name: Run historical strategy backtest
-        if: github.event_name == 'workflow_dispatch' && (inputs.task == 'backtest' || inputs.task == 'full_validation')
-        run: python backtest.py
       - name: Test Supabase
         if: github.event_name == 'workflow_dispatch' && (inputs.task == 'test_supabase' || inputs.task == 'full_validation')
         env:
@@ -89,15 +86,8 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python scheduler.py
-      - name: Upload backtest report
-        if: always() && github.event_name == 'workflow_dispatch' && (inputs.task == 'backtest' || inputs.task == 'full_validation')
-        uses: actions/upload-artifact@v4
-        with:
-          name: strategy-backtest-report
-          path: backtest_trades.csv
-          if-no-files-found: warn
       - name: Upload downloaded spot candles
-        if: always() && github.event_name == 'workflow_dispatch' && (inputs.task == 'download_data' || inputs.task == 'full_validation')
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.task == 'download_data'
         uses: actions/upload-artifact@v4
         with:
           name: candle-data-spot
