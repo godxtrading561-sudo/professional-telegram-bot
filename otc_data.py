@@ -111,3 +111,28 @@ if __name__ == "__main__":
         f"PASS: {len(candles)} completed 1-minute Quotex OTC candles "
         f"for {DEFAULT_SYMBOL}; latest={candles.index[-1].isoformat()}"
     )
+
+
+def evaluate_quotex_otc_result(direction, signal_candle_time, symbol=DEFAULT_SYMBOL):
+    """Evaluate the first completed OTC candle after the signal candle using the same feed."""
+    candles = fetch_quotex_otc_candles(symbol, limit=180)
+    signal_ts = pd.to_datetime(signal_candle_time, utc=True)
+    candidates = candles[candles.index > signal_ts]
+    if candidates.empty:
+        return None
+    candle = candidates.iloc[0]
+    entry, exit_price = float(candle.open), float(candle.close)
+    if exit_price == entry:
+        status = "TIE"
+    elif (direction == "CALL" and exit_price > entry) or (direction == "PUT" and exit_price < entry):
+        status = "PROFIT"
+    else:
+        status = "LOSS"
+    return {
+        "status": status,
+        "entry_price": entry,
+        "exit_price": exit_price,
+        "entry_time": candle.name.isoformat(),
+        "expiry_time": (candle.name + pd.Timedelta(minutes=1)).isoformat(),
+        "method": "OTCharts Quotex OTC 1-minute candle open-to-close",
+    }
