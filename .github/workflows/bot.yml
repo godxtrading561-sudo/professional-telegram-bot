@@ -14,9 +14,9 @@ concurrency:
       task:
         description: Select task
         required: true
-        default: telegram_test
+        default: test_yahoo_data
         type: choice
-        options: [telegram_test, test_otcharts, download_data, backtest, test_supabase, run_session, daily_messages]
+        options: [telegram_test, test_yahoo_data, download_data, backtest, test_supabase, daily_messages]
   schedule:
     - cron: "30 3 * * *"
     - cron: "30 6 * * *"
@@ -41,9 +41,9 @@ jobs:
       - name: Compile Python files
         run: python -m compileall -q .
       - name: Run offline safety regression tests
-        run: python -m unittest -v test_safety
+        run: python -m unittest -v test_safety test_signal_engine
       - name: Import critical bot modules
-        run: python -c "import config, quotex_data, signal_engine, state, session_controller, scheduler, bot; print('Bot modules imported successfully')"
+        run: python -c "import config, yahoo_data, signal_engine, state, session_controller, scheduler, bot; print('Bot modules imported successfully')"
 
   bot:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
@@ -65,11 +65,9 @@ jobs:
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
         run: |
           python -c "import os,requests; r=requests.post('https://api.telegram.org/bot'+os.environ['BOT_TOKEN']+'/sendMessage',json={'chat_id':os.environ['CHANNEL_ID'],'text':'PROFESSIONAL BOT CONNECTED'},timeout=20); r.raise_for_status(); print('Telegram test successful')"
-      - name: Test OTCharts OTC feed
-        if: github.event_name == 'workflow_dispatch' && inputs.task == 'test_otcharts'
-        env:
-          OTCHARTS_API_KEY: ${{ secrets.OTCHARTS_API_KEY }}
-        run: python test_otcharts.py
+      - name: Test Yahoo Finance 1-minute FX feed
+        if: github.event_name == 'workflow_dispatch' && inputs.task == 'test_yahoo_data'
+        run: python test_yahoo_data.py
       - name: Download historical SPOT candles
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'download_data'
         uses: actions/setup-node@v4
@@ -87,25 +85,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python test_supabase.py
-      - name: Run manual session
-        if: github.event_name == 'workflow_dispatch' && inputs.task == 'run_session'
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          OTCHARTS_API_KEY: ${{ secrets.OTCHARTS_API_KEY }}
-        run: python bot.py
-      - name: Run scheduled trading session
-        if: github.event_name == 'schedule' && github.event.schedule != '30 18 * * *' && github.event.schedule != '30 1 * * *' && github.event.schedule != '30 2 * * *'
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          OTCHARTS_API_KEY: ${{ secrets.OTCHARTS_API_KEY }}
-          SESSION_SCHEDULE_CRON: ${{ github.event.schedule }}
-        run: python bot.py
+      # Trading sessions intentionally remain disabled until data, strategy and persistence are verified.
       - name: Send daily scheduled message
         if: (github.event_name == 'schedule' && (github.event.schedule == '30 18 * * *' || github.event.schedule == '30 1 * * *' || github.event.schedule == '30 2 * * *')) || (github.event_name == 'workflow_dispatch' && inputs.task == 'daily_messages')
         env:
