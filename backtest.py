@@ -1,4 +1,4 @@
-"""Historical one-candle-expiry backtest; uses next candle open and close."""
+"""Historical one-candle-expiry backtest; signal at close, next candle open-to-close."""
 import glob
 import os
 import pandas as pd
@@ -31,25 +31,24 @@ def backtest_file(path):
         else:
             result = "WIN" if exit_price < entry else "LOSS"
 
-        trade = {
+        trades.append({
             "pair": os.path.basename(path).rsplit(".", 1)[0],
             "signal_candle": str(df.iloc[i].get("timestamp", i)),
             "expiry_candle": str(entry_candle.get("timestamp", i + 1)),
             "direction": signal["direction"],
-            "score": signal["score"],
+            "reason": signal.get("reason", ""),
             "entry": entry,
             "exit": exit_price,
             "result": result,
-        }
-        trades.append(trade)
+        })
 
     return trades
 
 
 def main():
-    files = sorted(glob.glob(os.path.join(DATA_FOLDER, "*.csv")))
+    files = sorted(glob.glob(os.path.join(DATA_FOLDER, "*_spot.csv")))
     if not files:
-        raise SystemExit("No candle CSV files found in data/.")
+        raise SystemExit("No *_spot.csv files found in data/. Run download_data first.")
 
     all_trades = []
     for path in files:
@@ -57,7 +56,7 @@ def main():
         all_trades.extend(backtest_file(path))
 
     if not all_trades:
-        print("No signals generated.")
+        print("No signals generated. No accuracy can be calculated.")
         return
 
     df = pd.DataFrame(all_trades)
