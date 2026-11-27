@@ -36,7 +36,7 @@ def main():
     summary = create_session_summary(session_id)
     message = session_close_message(sent, summary)
     message = message.replace("TEST SESSION CLOSED!", "TEST SESSION RECOVERED & CLOSED!")
-    message += "\\n\\n⚠️ Runner was interrupted; no additional signals will be sent."
+    message += "\n\n⚠️ Runner was interrupted; no additional signals will be sent."
     if not send_message(message):
         raise SystemExit("Telegram close notification failed; session state left active for safe retry.")
     if not close_session(session_id):
