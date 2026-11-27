@@ -8,8 +8,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import requests
 
-from config import BOT_TOKEN, CHANNEL_ID, TIMEZONE, TRADING_PAIRS, SUPABASE_URL, SUPABASE_KEY
-from yahoo_data import fetch_yahoo_candles, YahooDataError
+from config import BOT_TOKEN, CHANNEL_ID, TIMEZONE, SUPABASE_URL, SUPABASE_KEY
+from otc_data import fetch_quotex_otc_candles, QuotexOTCDataError, DEFAULT_SYMBOL
 from signal_engine import analyze_market
 from session_controller import run_session
 
@@ -59,14 +59,14 @@ def make_signal_chart(candles, symbol):
     recent = candles.tail(60)
     fig, ax = plt.subplots(figsize=(10, 5), dpi=140)
     ax.plot(recent.index, recent["close"], linewidth=1.8, label="Close")
-    ax.set_title(f"{symbol} FX SPOT — 1 Minute (Yahoo Finance)")
+    ax.set_title(f"{symbol} — QUOTEX OTC — 1 Minute")
     ax.set_xlabel("UTC")
-    ax.set_ylabel("Price")
+    ax.set_ylabel("OTC Price")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="best")
     fig.autofmt_xdate()
     fig.tight_layout()
-    fd, path = tempfile.mkstemp(prefix="fx_signal_", suffix=".png")
+    fd, path = tempfile.mkstemp(prefix="otc_signal_", suffix=".png")
     os.close(fd)
     fig.savefig(path, format="png")
     plt.close(fig)
@@ -74,24 +74,21 @@ def make_signal_chart(candles, symbol):
 
 
 def find_signal():
-    for pair, ticker in TRADING_PAIRS.items():
-        try:
-            candles = fetch_yahoo_candles(ticker, period="2d", interval="1m")
-        except YahooDataError as exc:
-            log.warning("Yahoo data unavailable for %s: %s", pair, exc)
-            continue
-        if candles.empty:
-            continue
-        signal = analyze_market(candles)
-        if signal:
-            signal["ticker"] = ticker
-            signal["candle_time"] = candles.index[-1].isoformat()
-            try:
-                signal["chart_path"] = make_signal_chart(candles, pair)
-            except Exception:
-                log.exception("Could not render FX chart for %s", pair)
-            return pair, signal
-    return None, None
+    try:
+        candles = fetch_quotex_otc_candles(DEFAULT_SYMBOL, limit=180)
+    except QuotexOTCDataError as exc:
+        log.warning("Quotex OTC feed unavailable; no signal: %s", exc)
+        return None, None
+    signal = analyze_market(candles)
+    if not signal:
+        return None, None
+    signal["ticker"] = DEFAULT_SYMBOL
+    signal["candle_time"] = candles.index[-1].isoformat()
+    try:
+        signal["chart_path"] = make_signal_chart(candles, DEFAULT_SYMBOL)
+    except Exception:
+        log.exception("Could not render Quotex OTC chart")
+    return DEFAULT_SYMBOL, signal
 
 
 def preflight_data_and_state():
@@ -104,19 +101,15 @@ def preflight_data_and_state():
     except Exception as exc:
         raise RuntimeError("Supabase preflight failed; no session was started.") from exc
 
-    errors = []
-    for pair, ticker in TRADING_PAIRS.items():
-        try:
-            candles = fetch_yahoo_candles(ticker, period="2d", interval="1m")
-            if len(candles) >= 60:
-                log.info("Yahoo FX preflight passed for %s (%d completed candles).", pair, len(candles))
-                return True
-        except YahooDataError as exc:
-            errors.append(f"{pair}: {exc}")
-    raise RuntimeError(
-        "Yahoo Finance did not return a usable fresh 1-minute FX dataset. "
-        "No session message or signal was sent. " + "; ".join(errors)
-    )
+    try:
+        candles = fetch_quotex_otc_candles(DEFAULT_SYMBOL, limit=180)
+    except QuotexOTCDataError as exc:
+        raise RuntimeError(
+            "Quotex OTC feed unavailable. Session safely cancelled; no Yahoo FX spot fallback is allowed. "
+            + str(exc)
+        ) from exc
+    log.info("Quotex OTC preflight passed for %s (%d completed candles).", DEFAULT_SYMBOL, len(candles))
+    return True
 
 
 def main():
