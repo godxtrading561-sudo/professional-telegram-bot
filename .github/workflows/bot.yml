@@ -14,7 +14,7 @@ concurrency:
       task:
         description: Select task
         required: true
-        default: test_yahoo_data
+        default: test_quotex_otc_data
         type: choice
         options: [telegram_test, test_telegram_e2e, test_quotex_otc_data, test_yahoo_data, full_validation, download_data, test_supabase, verify_latest_session, recover_interrupted_session, daily_messages]
   schedule:
@@ -105,7 +105,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python verify_session.py
-      - name: Run scheduled FX SPOT TEST trading session
+      - name: Run scheduled Quotex OTC trading session
         if: github.event_name == 'schedule' && (github.event.schedule == '30 3 * * *' || github.event.schedule == '30 6 * * *' || github.event.schedule == '30 8 * * *' || github.event.schedule == '30 12 * * *' || github.event.schedule == '30 17 * * *')
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
