@@ -4,6 +4,8 @@ Automated Telegram channel messenger and signal publisher. All times use **Asia/
 
 ## Data source and strategy
 
+- Quotex OTC M1 candle provider priority: QUANTEX (`QUANTEX_API_KEY`) first, then OTCharts (`OTCHARTS_API_KEY`). Both are independent read-only providers, not official Quotex APIs. If neither provides verified candles, the bot safely skips signals; it never substitutes Yahoo FX spot data for OTC.
+
 - Yahoo Finance yfinance 1-minute candles, requested with period=2d and interval=1m.
 - Ten ordinary FX symbols: EUR/USD, GBP/USD, USD/JPY, AUD/CAD, EUR/JPY, GBP/JPY, AUD/USD, USD/CHF, NZD/USD, EUR/GBP.
 - Original EMA 9 / EMA 21 + RSI 14 + candle-body confirmation strategy.
@@ -16,6 +18,8 @@ Automated Telegram channel messenger and signal publisher. All times use **Asia/
 - CHANNEL_ID — target private channel ID
 - SUPABASE_URL — Supabase project URL
 - SUPABASE_KEY — Supabase server-side service_role key; keep private
+- QUANTEX_API_KEY — optional QUANTEX key with `candles:read` access (preferred OTC source)
+- OTCHARTS_API_KEY — optional OTCharts key (fallback OTC source)
 
 Never commit tokens or keys.
 
