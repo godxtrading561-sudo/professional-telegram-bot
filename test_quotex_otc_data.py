@@ -7,4 +7,4 @@ if __name__ == "__main__":
     print(f"Symbol: {DEFAULT_SYMBOL}")
     print(f"Completed 1-minute candles: {len(candles)}")
     print(f"Latest candle UTC: {candles.index[-1].isoformat()}")
-    print("Source: OTCharts Quotex book (not Yahoo FX spot)")
+    print("Source: QUANTEX if configured, otherwise OTCharts Quotex book (never Yahoo FX spot)")
