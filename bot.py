@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import requests
 
 from config import BOT_TOKEN, CHANNEL_ID, TIMEZONE, SUPABASE_URL, SUPABASE_KEY
-from otc_data import fetch_quotex_otc_candles, QuotexOTCDataError, DEFAULT_SYMBOL
+from yahoo_data import fetch_yahoo_candles, YahooDataError
 from signal_engine import analyze_market
 from session_controller import run_session
 
@@ -89,9 +89,10 @@ def make_signal_chart(candles, symbol):
             zorder=3,
         ))
 
-    ax.set_title(f"{symbol} — QUOTEX OTC — 1 MIN CANDLE CHART", pad=12, fontweight="bold")
+    ax.set_title(f"{symbol} — FX SPOT — 1 MIN CANDLE CHART", pad=12, fontweight="bold")
     ax.set_xlabel("Time (UTC)")
-    ax.set_ylabel("OTC Price")
+    ax.set_ylabel("FX spot price")
+    ax.text(0.5, 0.98, "YAHOO FX SPOT — NOT QUOTEX OTC", transform=ax.transAxes, ha="center", va="top", color="#b91c1c", fontsize=9, fontweight="bold")
     ax.xaxis_date()
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=recent.index.tz))
     ax.grid(True, alpha=0.22, linestyle="--")
@@ -109,19 +110,21 @@ def make_signal_chart(candles, symbol):
 
 
 def find_signal():
-    # Propagate provider failures so the session closes immediately instead of
-    # silently waiting/retrying for 90 minutes with no verified OTC feed.
-    candles = fetch_quotex_otc_candles(DEFAULT_SYMBOL, limit=180)
+    # Free Yahoo FX spot feed; this is NOT Quotex OTC.
+    pair, ticker = "EUR/USD", "EURUSD=X"
+    candles = fetch_yahoo_candles(ticker, period="2d", interval="1m")
+    if candles.empty:
+        return None, None
     signal = analyze_market(candles)
     if not signal:
         return None, None
-    signal["ticker"] = DEFAULT_SYMBOL
+    signal["ticker"] = ticker
     signal["candle_time"] = candles.index[-1].isoformat()
     try:
-        signal["chart_path"] = make_signal_chart(candles, DEFAULT_SYMBOL)
+        signal["chart_path"] = make_signal_chart(candles, ticker)
     except Exception:
-        log.exception("Could not render Quotex OTC chart")
-    return DEFAULT_SYMBOL, signal
+        log.exception("Could not render FX spot chart")
+    return pair, signal
 
 
 def preflight_data_and_state():
@@ -135,13 +138,12 @@ def preflight_data_and_state():
         raise RuntimeError("Supabase preflight failed; no session was started.") from exc
 
     try:
-        candles = fetch_quotex_otc_candles(DEFAULT_SYMBOL, limit=180)
-    except QuotexOTCDataError as exc:
-        raise RuntimeError(
-            "Quotex OTC feed unavailable. Session safely cancelled; no Yahoo FX spot fallback is allowed. "
-            + str(exc)
-        ) from exc
-    log.info("Quotex OTC preflight passed for %s (%d completed candles).", DEFAULT_SYMBOL, len(candles))
+        candles = fetch_yahoo_candles("EURUSD=X", period="2d", interval="1m")
+        if candles.empty:
+            raise YahooDataError("No fresh completed EUR/USD 1-minute FX candles returned.")
+    except YahooDataError as exc:
+        raise RuntimeError(f"Free FX spot feed unavailable; session safely cancelled. {exc}") from exc
+    log.info("Free Yahoo FX spot preflight passed for EUR/USD (%d completed candles).", len(candles))
     return True
 
 
@@ -156,7 +158,7 @@ def main():
         try:
             send_message(
                 "⚠️ <b>TRADING SESSION SKIPPED</b>\n"
-                "Verified Quotex OTC candle data or persistent session storage is unavailable.\n"
+                "Free Yahoo FX spot candle data or persistent session storage is unavailable.\n"
                 "No CALL/PUT signals were generated or sent. Daily scheduled messages run separately."
             )
         except Exception:
