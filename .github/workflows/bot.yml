@@ -77,6 +77,7 @@ jobs:
       - name: Test Quotex OTC 1-minute candles (single request)
         if: github.event_name == 'workflow_dispatch' && inputs.task == 'test_quotex_otc_data'
         env:
+          QUANTEX_API_KEY: ${{ secrets.QUANTEX_API_KEY }}
           OTCHARTS_API_KEY: ${{ secrets.OTCHARTS_API_KEY }}
         run: python test_quotex_otc_data.py
       - name: Test Yahoo Finance 1-minute FX feed
