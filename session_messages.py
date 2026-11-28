@@ -30,7 +30,7 @@ def trade_result_message(trade, result):
         f"RESULT: <b>{labels.get(status, '⏳ RESULT PENDING — NOT VERIFIED')}</b>\n"
         f"ENTRY: <b>{result.get('entry_price', 'N/A')}</b>\n"
         f"EXPIRY: <b>{result.get('exit_price', 'N/A')}</b>\n"
-        "SOURCE: OTCharts Quotex OTC candles"
+        "SOURCE: Verified Quotex OTC candle feed"
     )
 
 
