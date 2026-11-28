@@ -19,7 +19,74 @@ class QuotexOTCDataError(RuntimeError):
     pass
 
 
+def _fetch_quantex_candles(symbol=DEFAULT_SYMBOL, limit=120):
+    """Fetch completed Quotex OTC M1 candles from QUANTEX (requires candles:read plan)."""
+    key = os.getenv("QUANTEX_API_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        response = requests.get(
+            "https://api.quantexbot.pro/v1/candles",
+            headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+            params={"broker": "quotex", "pair": symbol, "tf": "M1", "limit": min(max(int(limit), 60), 5000)},
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise QuotexOTCDataError(f"QUANTEX connection failed: {exc}") from exc
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise QuotexOTCDataError(f"QUANTEX returned non-JSON HTTP {response.status_code}.") from exc
+    if response.status_code != 200 or not isinstance(body, dict) or not body.get("ok"):
+        error = body.get("error", {}) if isinstance(body, dict) else {}
+        code = error.get("code", f"HTTP_{response.status_code}") if isinstance(error, dict) else f"HTTP_{response.status_code}"
+        message = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        if response.status_code in (401, 403) or code in ("permission_denied", "plan_required", "broker_not_in_plan"):
+            raise QuotexOTCDataError(
+                f"QUANTEX rejected candle access ({code}): {message}. "
+                "Its docs list candles:read for Pro/Business/Candle Basic/Candle Data/Full Market Data; "
+                "Developer Free is not listed for candle access."
+            )
+        raise QuotexOTCDataError(f"QUANTEX candle request failed ({code}): {message}")
+    data = body.get("data") or {}
+    if data.get("broker") != "quotex" or data.get("symbol") != symbol or data.get("timeframe") != "M1":
+        raise QuotexOTCDataError("QUANTEX response broker, symbol, or timeframe does not match request.")
+    rows = data.get("candles") or []
+    if len(rows) < 60:
+        raise QuotexOTCDataError(f"QUANTEX returned only {len(rows)} M1 candles; at least 60 are required.")
+    df = pd.DataFrame(rows)
+    required = ["epoch", "open", "high", "low", "close"]
+    if not all(column in df.columns for column in required):
+        raise QuotexOTCDataError("QUANTEX candle response is missing epoch/OHLC fields.")
+    df = df[required].copy()
+    df["timestamp"] = pd.to_datetime(df["epoch"], unit="s", utc=True, errors="coerce")
+    for column in ["open", "high", "low", "close"]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    df = df.dropna().set_index("timestamp").sort_index()
+    df = df[~df.index.duplicated(keep="last")]
+    now = pd.Timestamp.now(tz="UTC")
+    df = df[df.index < now.floor("min")]
+    if len(df) < 60:
+        raise QuotexOTCDataError("Fewer than 60 completed QUANTEX M1 candles are available.")
+    age = (now - df.index[-1]).total_seconds()
+    if age > 180:
+        raise QuotexOTCDataError(f"QUANTEX OTC feed is stale ({int(age)} seconds).")
+    valid = (
+        (df["high"] >= df[["open", "close"]].max(axis=1))
+        & (df["low"] <= df[["open", "close"]].min(axis=1))
+    )
+    df = df.loc[valid]
+    if len(df) < 60:
+        raise QuotexOTCDataError("Fewer than 60 valid completed QUANTEX candles remain.")
+    df.index.name = "timestamp"
+    return df.tail(180).copy()
+
+
 def fetch_quotex_otc_candles(symbol=DEFAULT_SYMBOL, limit=120):
+    # Prefer QUANTEX when configured; never substitute ordinary FX spot data.
+    quantex_candles = _fetch_quantex_candles(symbol, limit)
+    if quantex_candles is not None:
+        return quantex_candles
     key = os.getenv("OTCHARTS_API_KEY", "").strip()
     if not key:
         raise QuotexOTCDataError("OTCHARTS_API_KEY secret is missing.")
