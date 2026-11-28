@@ -113,6 +113,7 @@ jobs:
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          QUANTEX_API_KEY: ${{ secrets.QUANTEX_API_KEY }}
           OTCHARTS_API_KEY: ${{ secrets.OTCHARTS_API_KEY }}
           SESSION_SCHEDULE_CRON: ${{ github.event.schedule }}
         run: python bot.py
