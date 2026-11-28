@@ -2,7 +2,7 @@ def session_start_message(session_id):
     return (
         "🚨 <b>QUOTEX OTC SESSION STARTED 🟢</b>\n\n"
         "⚡ <b>Verified Quotex OTC 1-minute feed</b>\n\n"
-        "This is ordinary Forex market data, NOT Quotex OTC data.\n\n"
+        "Signals are sent only when verified Quotex OTC candles are available.\n\n"
         "⏳ Wait for a confirmed strategy setup.\n"
         "🛡️ No real-money result or OTC accuracy is implied."
     )
