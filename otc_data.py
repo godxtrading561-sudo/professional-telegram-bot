@@ -85,13 +85,27 @@ def _fetch_quantex_candles(symbol=DEFAULT_SYMBOL, limit=120):
 
 
 def fetch_quotex_otc_candles(symbol=DEFAULT_SYMBOL, limit=120):
-    # Prefer QUANTEX when configured; never substitute ordinary FX spot data.
-    quantex_candles = _fetch_quantex_candles(symbol, limit)
-    if quantex_candles is not None:
-        return quantex_candles
+    # Try QUANTEX first. If its account lacks the OHLC entitlement, allow the
+    # separately configured OTCharts key to be tried rather than blocking it.
+    quantex_error = None
+    try:
+        quantex_candles = _fetch_quantex_candles(symbol, limit)
+        if quantex_candles is not None:
+            return quantex_candles
+    except QuotexOTCDataError as exc:
+        quantex_error = exc
+
     key = os.getenv("OTCHARTS_API_KEY", "").strip()
     if not key:
-        raise QuotexOTCDataError("OTCHARTS_API_KEY secret is missing.")
+        if quantex_error:
+            raise QuotexOTCDataError(
+                f"QUANTEX unavailable: {quantex_error} "
+                "No OTCHARTS_API_KEY is configured for the independent fallback."
+            ) from quantex_error
+        raise QuotexOTCDataError(
+            "No usable OTC candle provider is configured. Add an authorized "
+            "QUANTEX_API_KEY with candles:read or an OTCHARTS_API_KEY."
+        )
 
     try:
         response = requests.get(
