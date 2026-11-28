@@ -72,8 +72,10 @@ def _fetch_quantex_candles(symbol=DEFAULT_SYMBOL, limit=120):
     if age > 180:
         raise QuotexOTCDataError(f"QUANTEX OTC feed is stale ({int(age)} seconds).")
     valid = (
-        (df["high"] >= df[["open", "close"]].max(axis=1))
+        (df[["open", "high", "low", "close"]] > 0).all(axis=1)
+        & (df["high"] >= df[["open", "close"]].max(axis=1))
         & (df["low"] <= df[["open", "close"]].min(axis=1))
+        & (df["high"] >= df["low"])
     )
     df = df.loc[valid]
     if len(df) < 60:
@@ -117,15 +119,37 @@ def fetch_quotex_otc_candles(symbol=DEFAULT_SYMBOL, limit=120):
             f"OTCharts returned non-JSON HTTP {response.status_code}."
         ) from exc
 
+    if not isinstance(payload, dict):
+        raise QuotexOTCDataError("OTCharts returned an unexpected non-object JSON response.")
+
     if response.status_code != 200:
-        detail = payload.get("error", payload) if isinstance(payload, dict) else payload
+        error = payload.get("error", {})
+        code = error.get("code", "") if isinstance(error, dict) else ""
+        message = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        if response.status_code == 401:
+            reason = "API key is missing, revoked, unknown, or the account email is unconfirmed."
+        elif response.status_code == 402:
+            reason = "OTCharts says this account has a plan it cannot serve; provider support must resolve this."
+        elif response.status_code == 403:
+            reason = "This key does not open the Quotex book or EURUSD_otc is not in its free five instruments."
+        elif response.status_code == 429:
+            reason = "The account request quota is exhausted; free tier is limited to 200 requests in its first month."
+        elif response.status_code == 502:
+            reason = "OTCharts reports that the upstream Quotex feed is temporarily unavailable."
+        else:
+            reason = f"Provider rejected the request (code={code or 'not supplied'})."
         raise QuotexOTCDataError(
-            f"OTCharts HTTP {response.status_code}: {detail}. "
-            "Check key, Quotex book access, free-tier instrument access and quota."
+            f"OTCharts HTTP {response.status_code}: {reason} Provider detail: {message}"
         )
 
     if payload.get("symbol") != symbol:
-        raise QuotexOTCDataError("OTCharts response symbol does not match request.")
+        raise QuotexOTCDataError(
+            f"OTCharts response symbol mismatch: requested {symbol}, received {payload.get('symbol')!r}."
+        )
+    if payload.get("interval") not in (None, "60s"):
+        raise QuotexOTCDataError(
+            f"OTCharts returned interval {payload.get('interval')!r}, expected '60s'."
+        )
     if payload.get("open") is False:
         raise QuotexOTCDataError(f"{symbol} is closed for trading on Quotex.")
     gaps = payload.get("gaps") or {}
